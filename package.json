@@ -1,0 +1,17 @@
+{
+  "name": "tijarah",
+  "private": true,
+  "workspaces": ["apps/api", "apps/web"],
+  "scripts": {
+    "dev:api": "npm run dev -w @tijarah/api",
+    "dev:web": "npm run dev -w @tijarah/web",
+    "db:migrate": "npm run db:migrate -w @tijarah/api",
+    "db:seed": "npm run db:seed -w @tijarah/api",
+    "db:push": "npm run db:push -w @tijarah/api",
+    "build:web": "npm run build -w @tijarah/web",
+    "start:api": "npm run start -w @tijarah/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

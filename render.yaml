@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: tijarah-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: .
+    buildCommand: npm install && npx prisma generate --schema=apps/api/prisma/schema.prisma
+    startCommand: npm run start -w @tijarah/api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        sync: false

@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tijarah
+      POSTGRES_PASSWORD: tijarah
+      POSTGRES_DB: tijarah
+    ports:
+      - "5432:5432"
+    volumes:
+      - tijarah_pg:/var/lib/postgresql/data
+
+volumes:
+  tijarah_pg:

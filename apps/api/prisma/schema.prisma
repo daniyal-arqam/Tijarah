@@ -1,0 +1,343 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SALESMAN
+  COMPANY
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum CredentialType {
+  ID
+  CR
+  CERT
+}
+
+enum CredentialStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LeadKind {
+  HOT
+  FOLLOW_UP
+  NOT_INTERESTED
+  CUSTOM
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  VIEWED
+  COUNTERED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum PaymentTerms {
+  ADVANCE_50
+  NET_15
+  NET_30
+  NET_45
+  COD
+}
+
+enum OrderStatus {
+  CONFIRMED
+  SENT_TO_FACTORY
+  IN_PRODUCTION
+  SHIPPED
+  DELIVERED
+  RECEIVED
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH
+  CHEQUE
+}
+
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  passwordHash  String
+  role          Role
+  status        UserStatus @default(ACTIVE)
+  emailVerified Boolean    @default(false)
+  phone         String?
+  phoneVerified Boolean    @default(false)
+  locale        String     @default("en")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  refreshTokens RefreshToken[]
+  salesman      SalesmanProfile?
+  company       CompanyProfile?
+  credentials   Credential[]
+  messages      Message[]
+  notifications Notification[]
+  reviewsAuthored Review[] @relation("ReviewAuthor")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+
+  @@index([userId])
+}
+
+model SalesmanProfile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName      String
+  slug             String   @unique
+  bio              String?
+  photoUrl         String?
+  yearsExperience  Int      @default(0)
+  cities           String   @default("[]")
+  specialties      String   @default("[]")
+  trustScore       Int      @default(10)
+  waNumber         String?
+
+  leadLists LeadList[]
+  invites   Invite[]
+  rfqs      Rfq[]
+  quotes    Quote[]
+  orders    Order[]
+  reviews   Review[]
+}
+
+model CompanyProfile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legalName   String
+  tradeName   String?
+  industry    String?
+  size        String?
+  city        String?
+  crNumber    String?
+  vatNumber   String?
+  contactName String?
+  phone       String?
+  logoUrl     String?
+
+  leadItems LeadListItem[]
+  invites   Invite[]
+  rfqs      Rfq[]
+  orders    Order[]
+}
+
+model Credential {
+  id         String            @id @default(cuid())
+  userId     String
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       CredentialType
+  fileUrl    String?
+  note       String?
+  status     CredentialStatus  @default(PENDING)
+  reviewedBy String?
+  createdAt  DateTime          @default(now())
+}
+
+model LeadList {
+  id         String          @id @default(cuid())
+  salesmanId String
+  salesman   SalesmanProfile @relation(fields: [salesmanId], references: [id], onDelete: Cascade)
+  kind       LeadKind
+  name       String
+  items      LeadListItem[]
+}
+
+model LeadListItem {
+  id        String         @id @default(cuid())
+  listId    String
+  list      LeadList       @relation(fields: [listId], references: [id], onDelete: Cascade)
+  companyId String
+  company   CompanyProfile @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, companyId])
+}
+
+model Invite {
+  id          String          @id @default(cuid())
+  salesmanId  String
+  salesman    SalesmanProfile @relation(fields: [salesmanId], references: [id], onDelete: Cascade)
+  companyId   String?
+  company     CompanyProfile? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  email       String
+  companyName String
+  city        String?
+  industry    String?
+  token       String          @unique
+  status      String          @default("PENDING")
+  createdAt   DateTime        @default(now())
+}
+
+model Rfq {
+  id               String          @id @default(cuid())
+  companyId        String
+  company          CompanyProfile  @relation(fields: [companyId], references: [id])
+  salesmanId       String
+  salesman         SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  title            String
+  specialty        String
+  specs            String
+  quantity         Float
+  unit             String          @default("pcs")
+  destinationCity  String
+  neededBy         DateTime?
+  fileUrl          String?
+  status           String          @default("OPEN")
+  createdAt        DateTime        @default(now())
+  quotes           Quote[]
+  messages         Message[]
+}
+
+model Quote {
+  id                   String          @id @default(cuid())
+  rfqId                String
+  rfq                  Rfq             @relation(fields: [rfqId], references: [id])
+  salesmanId           String
+  salesman             SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  version              Int             @default(1)
+  status               QuoteStatus     @default(DRAFT)
+  paymentTerms         PaymentTerms    @default(NET_30)
+  deliveryDate         DateTime?
+  notes                String?
+  factoryCostEstimate  Float
+  discount             Float           @default(0)
+  counterTotal         Float?
+  counterDate          DateTime?
+  createdAt            DateTime        @default(now())
+  lines                QuoteLine[]
+  order                Order?
+}
+
+model QuoteLine {
+  id        String @id @default(cuid())
+  quoteId   String
+  quote     Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  product   String
+  quantity  Float
+  unitPrice Float
+}
+
+model Order {
+  id           String          @id @default(cuid())
+  quoteId      String          @unique
+  quote        Quote           @relation(fields: [quoteId], references: [id])
+  salesmanId   String
+  salesman     SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  companyId    String
+  company      CompanyProfile  @relation(fields: [companyId], references: [id])
+  status       OrderStatus     @default(CONFIRMED)
+  promisedDate DateTime?
+  deliveredAt  DateTime?
+  receivedAt   DateTime?
+  createdAt    DateTime        @default(now())
+  events       OrderEvent[]
+  invoice      Invoice?
+  review       Review?
+  messages     Message[]
+}
+
+model OrderEvent {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  photoUrls String      @default("[]")
+  actorId   String
+  createdAt DateTime    @default(now())
+}
+
+model Invoice {
+  id        String        @id @default(cuid())
+  orderId   String        @unique
+  order     Order         @relation(fields: [orderId], references: [id])
+  number    String        @unique
+  subtotal  Float
+  vat       Float
+  total     Float
+  dueDate   DateTime
+  status    InvoiceStatus @default(UNPAID)
+  createdAt DateTime      @default(now())
+  payments  Payment[]
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Float
+  method    PaymentMethod
+  paidAt    DateTime      @default(now())
+  reference String?
+}
+
+model Review {
+  id               String          @id @default(cuid())
+  orderId          String          @unique
+  order            Order           @relation(fields: [orderId], references: [id])
+  salesmanId       String
+  salesman         SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  authorId         String
+  author           User            @relation("ReviewAuthor", fields: [authorId], references: [id])
+  quality          Int
+  deliverySpeed    Int
+  professionalism  Int
+  body             String
+  wouldOrderAgain  Boolean         @default(true)
+  response         String?
+  archived         Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+  rfqId     String?
+  rfq       Rfq?     @relation(fields: [rfqId], references: [id])
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
