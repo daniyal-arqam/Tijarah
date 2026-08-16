@@ -5,6 +5,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { ZodError } from "zod";
 import { env } from "./env.js";
+import { startKeepAlive } from "./lib/keepAlive.js";
 import { authRouter } from "./routes/auth.js";
 import { appRouter } from "./routes/app.js";
 
@@ -30,7 +31,14 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "api",
+    ts: new Date().toISOString(),
+    uptime: Math.round(process.uptime()),
+  });
+});
 
 app.get("/public/salesmen/:slug", async (req, res) => {
   const { prisma } = await import("./lib/prisma.js");
@@ -85,4 +93,5 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 
 app.listen(env.port, () => {
   console.log(`Tijarah API on http://localhost:${env.port}`);
+  startKeepAlive();
 });
