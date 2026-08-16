@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { PageHead } from "@/components/PageHead";
+import { useI18n } from "@/components/Providers";
 
 type Invoice = {
   id: string;
@@ -14,6 +16,7 @@ type Invoice = {
 };
 
 export default function InvoicesPage() {
+  const { t } = useI18n();
   const [rows, setRows] = useState<Invoice[]>([]);
   const [me, setMe] = useState<{ role: string } | null>(null);
   useEffect(() => {
@@ -22,25 +25,24 @@ export default function InvoicesPage() {
   }, []);
   return (
     <div>
-      <h1 className="text-3xl font-semibold">Invoices</h1>
-      <p className="text-zinc-500">VAT 15% · SAR · bilingual tax invoice</p>
-      <div className="mt-6 space-y-4">
+      <PageHead title={t.invoices} subtitle={t.invoicesSub} />
+      <div className="mt-7 space-y-4">
         {rows.map((i) => (
-          <article key={i.id} className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-[#16181f]">
+          <article key={i.id} className="uplift surface-slab rounded-2xl p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-xs text-zinc-500">TAX INVOICE / فاتورة ضريبية</div>
+                <div className="text-xs text-muted-foreground">{t.taxInvoice}</div>
                 <div className="text-xl font-semibold">{i.number}</div>
-                <div className="text-sm text-zinc-500">{i.order?.company?.legalName}</div>
+                <div className="text-sm text-muted-foreground">{i.order?.company?.legalName}</div>
               </div>
               <div className="text-end">
-                <div className="text-2xl font-semibold text-copper">{i.total.toLocaleString()} SAR</div>
+                <div className="text-2xl font-semibold text-molten">{i.total.toLocaleString()} SAR</div>
                 <div className="text-xs">VAT {i.vat.toLocaleString()} · {i.status}</div>
               </div>
             </div>
             {me?.role === "SALESMAN" && i.status !== "PAID" && (
               <button
-                className="mt-4 rounded-lg bg-copper px-4 py-2 text-sm font-medium text-black"
+                className="btn-molten mt-4 text-sm"
                 onClick={async () => {
                   await api(`/api/invoices/${i.id}/pay`, {
                     method: "POST",
@@ -49,7 +51,7 @@ export default function InvoicesPage() {
                   setRows(await api("/api/invoices"));
                 }}
               >
-                Record bank transfer
+                {t.recordTransfer}
               </button>
             )}
           </article>

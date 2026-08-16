@@ -2,21 +2,31 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/components/Providers";
+import { BrandMark } from "@/components/marketing/BrandMark";
 
 export default function LoginPage() {
   const { t } = useI18n();
   const router = useRouter();
-  const [email, setEmail] = useState("salesman@tijarah.sa");
-  const [password, setPassword] = useState("Tijarah1!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [err, setErr] = useState("");
+  const [googleMsg, setGoogleMsg] = useState("");
+
+  useEffect(() => {
+    const saved = localStorage.getItem("tijarah-email");
+    if (saved) setEmail(saved);
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
     try {
+      if (remember) localStorage.setItem("tijarah-email", email);
+      else localStorage.removeItem("tijarah-email");
       await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
       router.push("/app");
     } catch (ex) {
@@ -25,32 +35,51 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-ink px-4">
-      <form onSubmit={onSubmit} className="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#16181f] p-8">
-        <h1 className="text-3xl font-semibold text-white">{t.welcome}</h1>
-        <p className="mt-1 text-sm text-zinc-400">{t.workspace}</p>
-        <label className="mt-6 block text-sm text-zinc-400">Email</label>
-        <input
-          className="mt-1 w-full rounded-lg border border-zinc-700 bg-ink px-3 py-2 text-white"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <label className="mt-4 block text-sm text-zinc-400">Password</label>
-        <input
-          type="password"
-          className="mt-1 w-full rounded-lg border border-zinc-700 bg-ink px-3 py-2 text-white"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
-        <button className="mt-6 w-full rounded-lg bg-copper py-3 font-medium text-black shadow-glow">{t.login}</button>
-        <p className="mt-4 text-center text-sm text-zinc-500">
-          New?{" "}
-          <Link href="/signup" className="text-copper">
-            {t.signup}
-          </Link>
-        </p>
-      </form>
+    <div className="grid min-h-screen place-items-center bg-background px-4">
+      <div className="w-full max-w-md">
+        <BrandMark />
+        <form onSubmit={onSubmit} className="surface-slab mt-8 rounded-2xl p-8">
+          <h1 className="font-display text-3xl font-bold">{t.welcome}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t.workspace}</p>
+          <label className="mt-6 block text-sm text-muted-foreground">{t.email}</label>
+          <input className="field" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          <label className="mt-4 block text-sm text-muted-foreground">{t.password}</label>
+          <input className="field" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <div className="mt-4 flex items-center justify-between text-sm">
+            <label className="flex items-center gap-2 text-muted-foreground">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              {t.remember}
+            </label>
+            <Link href="/forgot-password" className="text-primary">
+              {t.forgot}
+            </Link>
+          </div>
+          {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
+          <button className="btn-molten mt-6 w-full py-3">{t.login}</button>
+          <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-widest text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            {t.or}
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <button
+            type="button"
+            className="btn-steel w-full py-3"
+            onClick={() => setGoogleMsg(t.googleHint)}
+          >
+            {t.google}
+          </button>
+          {googleMsg && <p className="mt-3 text-sm text-muted-foreground">{googleMsg}</p>}
+          <p className="mt-5 text-center text-sm text-muted-foreground">
+            {t.newTo}{" "}
+            <Link href="/signup" className="text-primary">
+              {t.createAccount}
+            </Link>
+          </p>
+        </form>
+        <Link href="/" className="mt-6 block text-center text-sm text-muted-foreground">
+          ← {t.backHome}
+        </Link>
+      </div>
     </div>
   );
 }

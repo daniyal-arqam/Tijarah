@@ -17,6 +17,6 @@ export type Me = {
   email: string;
   role: "SALESMAN" | "COMPANY" | "ADMIN";
   locale?: string;
-  salesman?: { id: string; displayName: string; slug: string; trustScore: number } | null;
-  company?: { id: string; legalName: string; city?: string } | null;
+  salesman?: { id: string; displayName: string; slug: string; trustScore: number; photoUrl?: string | null; bio?: string; firmName?: string; specialties?: string } | null;
+  company?: { id: string; legalName: string; city?: string; logoUrl?: string | null; contactName?: string } | null;
 };

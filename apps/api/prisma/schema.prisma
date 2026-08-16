@@ -86,6 +86,8 @@ model User {
   phone         String?
   phoneVerified Boolean    @default(false)
   locale        String     @default("en")
+  passwordResetHash    String?
+  passwordResetExpires DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 

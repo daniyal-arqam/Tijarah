@@ -2,11 +2,175 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --background: 24 12% 6%;
+  --foreground: 36 20% 94%;
+  --card: 24 10% 9%;
+  --muted: 24 8% 14%;
+  --muted-foreground: 30 8% 62%;
+  --border: 24 8% 18%;
+  --primary: 24 92% 54%;
+  --molten: 22 95% 52%;
+  --success: 142 55% 45%;
+  --accent: 38 80% 52%;
+}
+
+html.light {
+  --background: 36 28% 96%;
+  --foreground: 24 16% 10%;
+  --card: 36 30% 99%;
+  --muted: 36 16% 90%;
+  --muted-foreground: 24 8% 38%;
+  --border: 30 12% 82%;
+  --primary: 22 90% 46%;
+  --molten: 22 92% 48%;
+}
+
 html,
 body {
   min-height: 100%;
 }
 
 body {
-  font-family: Inter, "IBM Plex Sans", system-ui, sans-serif;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+
+.font-display {
+  font-family: "Space Grotesk", "DM Sans", system-ui, sans-serif;
+}
+
+.font-mono-ui {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(hsl(var(--border) / 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border) / 0.35) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+.glow-molten {
+  box-shadow: 0 8px 28px hsl(var(--molten) / 0.32);
+}
+
+.surface-slab {
+  background: linear-gradient(180deg, hsl(var(--card)) 0%, hsl(24 10% 7%) 100%);
+  border: 1px solid hsl(var(--border) / 0.7);
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.35);
+}
+
+html.light .surface-slab {
+  background: hsl(var(--card));
+  box-shadow: 0 12px 32px rgb(24 16 8 / 0.08);
+}
+
+.surface-extrude {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border) / 0.7);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.28);
+}
+
+.pic-zoom {
+  transition: transform 0.6s ease;
+}
+
+.card-flip {
+  --background: 36 30% 97%;
+  --foreground: 24 16% 10%;
+  --card: 36 32% 98%;
+  --muted: 30 14% 90%;
+  --muted-foreground: 24 8% 36%;
+  --border: 30 10% 80%;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  box-shadow: 0 12px 28px rgb(24 16 8 / 0.1);
+}
+
+html.light .card-flip {
+  --background: 24 12% 7%;
+  --foreground: 36 20% 94%;
+  --card: 24 10% 10%;
+  --muted: 24 8% 16%;
+  --muted-foreground: 30 8% 62%;
+  --border: 24 8% 20%;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  box-shadow: 0 16px 36px rgb(0 0 0 / 0.35);
+}
+
+.uplift,
+.btn-molten,
+.btn-steel {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+@media (hover: hover) {
+  .uplift:hover,
+  .btn-molten:hover,
+  .btn-steel:hover {
+    transform: translateY(-3px);
+  }
+
+  .pic-zoom:hover {
+    transform: scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uplift,
+  .btn-molten,
+  .btn-steel,
+  .pic-zoom {
+    transition: none;
+  }
+}
+
+.sheen {
+  background:
+    radial-gradient(1200px 200px at 50% -10%, hsl(var(--primary) / 0.16), transparent 50%),
+    hsl(var(--card));
+}
+
+.btn-molten {
+  @apply inline-flex items-center justify-center gap-2 rounded-md bg-molten px-4 py-2 text-sm font-medium text-black hover:brightness-110;
+  box-shadow: 0 8px 28px hsl(var(--molten) / 0.32);
+}
+
+.btn-steel {
+  @apply inline-flex items-center justify-center rounded-md border border-border bg-muted/40 px-4 py-2 text-sm font-medium text-foreground hover:bg-muted;
+}
+
+.field {
+  @apply mt-1 w-full rounded-lg border border-border bg-background px-3 py-2.5 text-foreground outline-none ring-molten/0 transition focus:ring-2 focus:ring-molten/40;
+}
+
+.tone-glow {
+  position: relative;
+  isolation: isolate;
+}
+
+.tone-glow::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(900px 520px at 8% -10%, hsl(22 95% 52% / 0.22), transparent 55%),
+    radial-gradient(820px 460px at 96% 0%, hsl(188 78% 42% / 0.16), transparent 52%);
+}
+
+html.light .tone-glow::before {
+  background:
+    radial-gradient(900px 520px at 8% -10%, hsl(22 92% 48% / 0.12), transparent 55%),
+    radial-gradient(820px 460px at 96% 0%, hsl(188 60% 40% / 0.08), transparent 52%);
+}
+
+.tone-glow > * {
+  position: relative;
+  z-index: 1;
 }

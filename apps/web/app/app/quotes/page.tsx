@@ -3,48 +3,83 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { PageHead } from "@/components/PageHead";
+import { useI18n } from "@/components/Providers";
+import { StatusBadge } from "@/components/ui";
 
-type Quote = { id: string; status: string; total?: number; version: number; rfq?: { title: string; company?: { legalName: string } } };
+type Quote = {
+  id: string;
+  status: string;
+  total?: number;
+  version: number;
+  paymentTerms?: string;
+  deliveryDate?: string;
+  rfq?: { title: string; company?: { legalName: string } };
+};
+
+function terms(v?: string) {
+  if (!v) return "—";
+  return v.replace("ADVANCE_50", "Advance 50%").replace("NET_", "Net ").replace("COD", "COD");
+}
 
 export default function QuotesPage() {
+  const { t } = useI18n();
   const [rows, setRows] = useState<Quote[]>([]);
+  const [filter, setFilter] = useState("ALL");
   useEffect(() => {
     api("/api/quotes").then(setRows).catch(() => setRows([]));
   }, []);
+  const shown = rows.filter((q) => filter === "ALL" || q.status === filter);
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold">Quotes</h1>
-          <p className="text-zinc-500">Build and track quotes you&apos;ve sent.</p>
-        </div>
-        <Link href="/app/rfqs" className="rounded-lg bg-copper px-4 py-2 text-sm font-medium text-black">
-          + New from RFQ
-        </Link>
+      <PageHead
+        title={t.quotes}
+        subtitle={t.quotesSub}
+        actions={
+          <Link href="/app/rfqs" className="btn-molten text-sm">
+            {t.newQuote}
+          </Link>
+        }
+      />
+      <div className="mt-4 flex justify-end">
+        <select className="field mt-0 w-44" value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="ALL">{t.allStatuses}</option>
+          {["DRAFT", "SENT", "VIEWED", "COUNTERED", "ACCEPTED", "REJECTED"].map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
       </div>
-      <div className="mt-6 overflow-x-auto rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-[#16181f]">
-        <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="text-zinc-500">
+      <div className="surface-slab mt-4 overflow-x-auto rounded-2xl">
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="text-muted-foreground">
             <tr>
-              <th className="p-4">Quote</th>
-              <th>Company</th>
-              <th>Product</th>
-              <th>Amount</th>
-              <th>Status</th>
+              <th className="p-4">{t.quotes}</th>
+              <th>{t.company}</th>
+              <th>{t.productLine}</th>
+              <th>{t.delivery}</th>
+              <th>{t.terms}</th>
+              <th>{t.amount}</th>
+              <th>{t.status}</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((q) => (
-              <tr key={q.id} className="border-t border-zinc-200 dark:border-zinc-800">
-                <td className="p-4">v{q.version}</td>
+            {shown.map((q) => (
+              <tr key={q.id} className="border-t border-border">
+                <td className="p-4 font-mono-ui text-xs">Q-{q.id.slice(-4).toUpperCase()}</td>
                 <td>{q.rfq?.company?.legalName ?? "—"}</td>
                 <td>{q.rfq?.title}</td>
-                <td>{q.total?.toLocaleString()} SAR</td>
-                <td>{q.status}</td>
+                <td>{q.deliveryDate ? q.deliveryDate.slice(0, 10) : "—"}</td>
+                <td>{terms(q.paymentTerms)}</td>
+                <td className="font-medium">{q.total?.toLocaleString()} SAR</td>
                 <td>
-                  <Link href={`/app/quotes/${q.id}`} className="text-copper">
-                    View
+                  <StatusBadge status={q.status} />
+                </td>
+                <td>
+                  <Link href={`/app/quotes/${q.id}`} className="text-primary">
+                    {t.view}
                   </Link>
                 </td>
               </tr>

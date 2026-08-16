@@ -4,6 +4,6 @@ type UserRow = User & { salesman?: SalesmanProfile | null; company?: CompanyProf
 
 export function publicUser(row: UserRow | null) {
   if (!row) return null;
-  const { passwordHash: _pw, ...rest } = row;
+    const { passwordHash: _pw, passwordResetHash: _r, passwordResetExpires: _e, ...rest } = row;
   return rest;
 }

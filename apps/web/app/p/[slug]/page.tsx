@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { SiteHeader } from "@/components/marketing/SiteHeader";
+import { SiteFooter } from "@/components/marketing/SiteFooter";
+import { useI18n } from "@/components/Providers";
+import { Avatar, Stars } from "@/components/ui";
 
 export default function PublicProfile() {
+  const { t } = useI18n();
   const { slug } = useParams<{ slug: string }>();
   const [s, setS] = useState<{
     displayName: string;
@@ -12,6 +17,7 @@ export default function PublicProfile() {
     cities: string[];
     specialties: string[];
     waNumber?: string;
+    photoUrl?: string;
     reviews: { body: string; quality: number }[];
   } | null>(null);
 
@@ -21,37 +27,54 @@ export default function PublicProfile() {
       .then(setS);
   }, [slug]);
 
-  if (!s) return <p className="p-8">Loading…</p>;
+  if (!s) {
+    return (
+      <div className="min-h-screen bg-background">
+        <SiteHeader />
+        <p className="p-8 text-muted-foreground">{t.loading}</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-ink px-6 py-12 text-zinc-100">
-      <div className="mx-auto max-w-3xl">
-        <div className="text-copper">TIJARAH</div>
-        <h1 className="mt-2 text-4xl font-semibold">{s.displayName}</h1>
-        <p className="mt-2 text-zinc-400">{s.bio}</p>
-        <div className="mt-4 text-copper">Trust {s.trustScore}/100</div>
+    <div className="min-h-screen bg-background text-foreground">
+      <SiteHeader />
+      <main className="mx-auto max-w-3xl px-6 py-12">
+        <div className="text-xs uppercase tracking-widest text-primary">Tijarah</div>
+        <div className="mt-4 flex items-center gap-4">
+          <Avatar name={s.displayName} src={s.photoUrl} size="lg" />
+          <div>
+            <h1 className="font-display text-4xl font-bold">{s.displayName}</h1>
+            <Stars value={5} className="mt-1" />
+          </div>
+        </div>
+        <p className="mt-2 text-muted-foreground">{s.bio}</p>
+        <div className="mt-4 text-molten">
+          {t.trust} {s.trustScore}/100
+        </div>
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {s.specialties.map((x) => (
-            <span key={x} className="rounded border border-zinc-600 px-2 py-1">
+            <span key={x} className="rounded border border-border px-2 py-1">
               {x}
             </span>
           ))}
         </div>
         {s.waNumber && (
-          <a className="mt-6 inline-block rounded-lg border border-copper px-4 py-2 text-copper" href={`https://wa.me/${s.waNumber}`}>
-            WhatsApp
+          <a className="btn-steel mt-6 inline-block text-primary" href={`https://wa.me/${s.waNumber}`}>
+            {t.whatsapp}
           </a>
         )}
-        <h2 className="mt-10 text-xl">Reviews</h2>
+        <h2 className="mt-10 font-display text-xl font-semibold">{t.reviews}</h2>
         <ul className="mt-4 space-y-3">
           {s.reviews.map((r, i) => (
-            <li key={i} className="rounded-xl border border-zinc-800 p-4">
-              <div className="text-copper">{r.quality}/5</div>
+            <li key={i} className="uplift surface-slab rounded-xl p-4">
+              <div className="text-molten">{r.quality}/5</div>
               <p className="mt-1">{r.body}</p>
             </li>
           ))}
         </ul>
-      </div>
+      </main>
+      <SiteFooter />
     </div>
   );
 }

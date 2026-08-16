@@ -5,13 +5,25 @@ export default {
   theme: {
     extend: {
       colors: {
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        card: "hsl(var(--card))",
+        muted: "hsl(var(--muted))",
+        "muted-foreground": "hsl(var(--muted-foreground))",
+        border: "hsl(var(--border))",
+        primary: "hsl(var(--primary))",
+        molten: "hsl(var(--molten))",
+        success: "hsl(var(--success))",
+        accent: "hsl(var(--accent))",
+        secondary: "hsl(var(--muted))",
         ink: "#12141a",
         paper: "#f4f1ea",
         copper: "#e8893a",
         gold: "#c4a35a",
       },
       fontFamily: {
-        sans: ["Inter", "IBM Plex Sans", "system-ui", "sans-serif"],
+        sans: ["DM Sans", "system-ui", "sans-serif"],
+        display: ["Space Grotesk", "DM Sans", "system-ui", "sans-serif"],
       },
       boxShadow: {
         glow: "0 8px 28px rgba(232, 137, 58, 0.28)",

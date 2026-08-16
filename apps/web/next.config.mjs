@@ -16,6 +16,20 @@ const nextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      { source: "/dashboard", destination: "/app", permanent: false },
+      { source: "/companies", destination: "/app/leads", permanent: false },
+      { source: "/outreach", destination: "/app/outreach", permanent: false },
+      { source: "/quotes", destination: "/app/quotes", permanent: false },
+      { source: "/orders", destination: "/app/orders", permanent: false },
+      { source: "/reviews", destination: "/app/reviews", permanent: false },
+      { source: "/profile", destination: "/app/profile", permanent: false },
+      { source: "/suppliers", destination: "/app/suppliers", permanent: false },
+      { source: "/invoices", destination: "/app/invoices", permanent: false },
+      { source: "/rfqs", destination: "/app/rfqs", permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       { source: "/auth/:path*", destination: `${API}/auth/:path*` },

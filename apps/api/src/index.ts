@@ -67,6 +67,7 @@ app.get("/public/salesmen/:slug", async (req, res) => {
     specialties: parse(s.specialties),
     trustScore: s.trustScore,
     waNumber: s.waNumber,
+    photoUrl: s.photoUrl,
     reviews: s.reviews.map((r) => ({
       quality: r.quality,
       deliverySpeed: r.deliverySpeed,

@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { PageHead } from "@/components/PageHead";
+import { useI18n } from "@/components/Providers";
+import { Field, Stars } from "@/components/ui";
 
 type Review = {
   id: string;
@@ -10,10 +13,12 @@ type Review = {
   professionalism: number;
   body: string;
   createdAt: string;
+  order?: { company?: { legalName: string } };
 };
-type Order = { id: string; status: string; review?: { id: string } | null };
+type Order = { id: string; status: string; review?: { id: string } | null; company?: { legalName: string }; quote?: { rfq?: { title: string } } };
 
 export default function ReviewsPage() {
+  const { t } = useI18n();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [me, setMe] = useState<{ role: string } | null>(null);
@@ -28,41 +33,107 @@ export default function ReviewsPage() {
   }, []);
 
   const unlocked = orders.filter((o) => o.status === "RECEIVED" && !o.review);
+  const avg = (r: Review) => (r.quality + r.deliverySpeed + r.professionalism) / 3;
+  const overall = reviews.length ? reviews.reduce((s, r) => s + avg(r), 0) / reviews.length : 0;
+  const dist = useMemo(() => {
+    const d = [0, 0, 0, 0, 0];
+    for (const r of reviews) d[Math.max(1, Math.min(5, Math.round(avg(r)))) - 1] += 1;
+    return d;
+  }, [reviews]);
+  const maxBar = Math.max(1, ...dist);
 
   return (
     <div>
-      <h1 className="text-3xl font-semibold">Reviews</h1>
-      <p className="text-zinc-500">Only after a received order.</p>
+      <PageHead title={t.reviews} subtitle={t.reviewsFromBuyers} />
+      <div className="uplift card-flip mt-7 flex flex-wrap items-center gap-8 rounded-2xl p-6">
+        <div>
+          <div className="font-display text-5xl font-bold">{reviews.length ? overall.toFixed(1) : "—"}</div>
+          <Stars value={overall} className="mt-2 text-xl" />
+          <div className="mt-1 text-sm text-muted-foreground">
+            {reviews.length} {t.reviews}
+          </div>
+        </div>
+        <div className="min-w-[220px] flex-1 space-y-2">
+          {[5, 4, 3, 2, 1].map((star) => (
+            <div key={star} className="flex items-center gap-3 text-xs">
+              <span className="w-12 text-muted-foreground">{star} ★</span>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-molten" style={{ width: `${(dist[star - 1] / maxBar) * 100}%` }} />
+              </div>
+              <span className="w-6 text-end">{dist[star - 1]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {me?.role === "COMPANY" && (
         <form
-          className="mt-6 space-y-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-[#16181f]"
+          className="surface-slab mt-6 grid gap-4 rounded-2xl p-6 md:grid-cols-3"
           onSubmit={async (e) => {
             e.preventDefault();
             await api("/api/reviews", { method: "POST", body: JSON.stringify(form) });
             setReviews(await api("/api/reviews"));
+            setForm({ ...form, orderId: "", body: "" });
           }}
         >
-          <select className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700" value={form.orderId} onChange={(e) => setForm({ ...form, orderId: e.target.value })}>
-            <option value="">Select received order</option>
-            {unlocked.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-          <textarea className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700" placeholder="Your review" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
-          <button className="rounded-lg bg-copper px-4 py-2 font-medium text-black" disabled={!form.orderId}>
-            Submit review
+          <Field label={t.selectOrder} hint={t.reviewsSub}>
+            <select className="field" required value={form.orderId} onChange={(e) => setForm({ ...form, orderId: e.target.value })}>
+              <option value="">{t.selectOrder}</option>
+              {unlocked.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.quote?.rfq?.title || o.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t.quality}>
+            <select className="field" value={form.quality} onChange={(e) => setForm({ ...form, quality: Number(e.target.value) })}>
+              {[5, 4, 3, 2, 1].map((n) => (
+                <option key={n} value={n}>
+                  {n} / 5
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t.speed}>
+            <select className="field" value={form.deliverySpeed} onChange={(e) => setForm({ ...form, deliverySpeed: Number(e.target.value) })}>
+              {[5, 4, 3, 2, 1].map((n) => (
+                <option key={n} value={n}>
+                  {n} / 5
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t.professionalism}>
+            <select className="field" value={form.professionalism} onChange={(e) => setForm({ ...form, professionalism: Number(e.target.value) })}>
+              {[5, 4, 3, 2, 1].map((n) => (
+                <option key={n} value={n}>
+                  {n} / 5
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="md:col-span-3">
+            <Field label={t.yourReview}>
+              <textarea className="field" required value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+            </Field>
+          </div>
+          <button className="btn-molten md:col-span-3" disabled={!form.orderId}>
+            {t.submitReview}
           </button>
         </form>
       )}
+
       <ul className="mt-8 space-y-4">
         {reviews.map((r) => (
-          <li key={r.id} className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
-            <div className="text-copper">
-              Quality {r.quality} · Speed {r.deliverySpeed} · Professionalism {r.professionalism}
+          <li key={r.id} className="uplift card-flip rounded-2xl p-5">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="font-semibold">{r.order?.company?.legalName || t.company}</div>
+              <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs text-emerald-400">{t.verifiedOrder}</span>
+              <span className="ms-auto text-xs text-muted-foreground">{r.createdAt.slice(0, 10)}</span>
             </div>
-            <p className="mt-2">{r.body}</p>
+            <Stars value={avg(r)} className="mt-2" />
+            <p className="mt-2 text-sm text-muted-foreground">{r.body}</p>
           </li>
         ))}
       </ul>

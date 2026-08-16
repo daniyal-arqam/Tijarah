@@ -30,6 +30,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     document.documentElement.lang = locale;
     document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
     document.documentElement.classList.toggle("dark", dark);
+    document.documentElement.classList.toggle("light", !dark);
   }, [locale, dark]);
 
   return (

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { useI18n } from "@/components/Providers";
 
 const STEPS = ["CONFIRMED", "SENT_TO_FACTORY", "IN_PRODUCTION", "SHIPPED", "DELIVERED", "RECEIVED"];
 
@@ -16,6 +17,7 @@ type Order = {
 };
 
 export default function OrderDetail() {
+  const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const [o, setO] = useState<Order | null>(null);
   const [me, setMe] = useState<{ role: string } | null>(null);
@@ -30,13 +32,13 @@ export default function OrderDetail() {
     load();
   }, [id]);
 
-  if (!o) return <p>Loading…</p>;
+  if (!o) return <p className="text-muted-foreground">{t.loading}</p>;
   const idx = STEPS.indexOf(o.status);
 
   return (
     <div>
-      <h1 className="text-3xl font-semibold">Order details</h1>
-      <p className="text-zinc-500">
+      <h1 className="font-display text-3xl font-bold">{t.orders}</h1>
+      <p className="text-muted-foreground">
         {o.quote?.rfq?.title} · {o.company?.legalName} · {o.quote?.total?.toLocaleString()} SAR
       </p>
       <div className="mt-8 flex flex-wrap gap-2">
@@ -44,7 +46,7 @@ export default function OrderDetail() {
           <div
             key={s}
             className={`rounded-full px-3 py-1 text-xs ${
-              i <= idx ? "bg-copper text-black" : "border border-zinc-600 text-zinc-500"
+              i <= idx ? "bg-molten text-black" : "border border-border text-muted-foreground"
             }`}
           >
             {s.replaceAll("_", " ")}
@@ -53,9 +55,9 @@ export default function OrderDetail() {
       </div>
       <ul className="mt-8 space-y-3 text-sm">
         {o.events.map((e) => (
-          <li key={e.id} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <li key={e.id} className="uplift surface-slab rounded-xl p-3">
             <span className="font-medium">{e.status}</span> — {e.note}{" "}
-            <span className="text-zinc-500">{new Date(e.createdAt).toLocaleString()}</span>
+            <span className="text-muted-foreground">{new Date(e.createdAt).toLocaleString()}</span>
           </li>
         ))}
       </ul>
@@ -64,30 +66,30 @@ export default function OrderDetail() {
           {STEPS.filter((s) => STEPS.indexOf(s) > idx && s !== "RECEIVED").map((s) => (
             <button
               key={s}
-              className="rounded-lg border border-zinc-500 px-3 py-2 text-sm"
+              className="btn-steel text-sm"
               onClick={async () => {
                 await api(`/api/orders/${o.id}/status`, { method: "POST", body: JSON.stringify({ status: s, note: `Moved to ${s}` }) });
                 await load();
               }}
             >
-              Mark {s.replaceAll("_", " ")}
+              {s.replaceAll("_", " ")}
             </button>
           ))}
         </div>
       )}
       {me?.role === "COMPANY" && o.status === "DELIVERED" && (
         <button
-          className="mt-6 rounded-lg bg-copper px-4 py-2 font-medium text-black"
+          className="btn-molten mt-6"
           onClick={async () => {
             await api(`/api/orders/${o.id}/receive`, { method: "POST" });
-            setMsg("Receipt confirmed — you can leave a review");
+            setMsg(t.confirmReceipt);
             await load();
           }}
         >
-          Confirm receipt
+          {t.confirmReceipt}
         </button>
       )}
-      {msg && <p className="mt-3 text-copper">{msg}</p>}
+      {msg && <p className="mt-3 text-molten">{msg}</p>}
     </div>
   );
 }

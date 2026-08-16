@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import rateLimit from "express-rate-limit";
 import { prisma } from "../lib/prisma.js";
@@ -175,6 +176,65 @@ authRouter.post("/refresh", async (req, res) => {
   await prisma.refreshToken.update({ where: { id: row.id }, data: { revoked: true } });
   await issueRefresh(res, row.user.id, row.user.role);
   res.json({ ok: true, role: row.user.role });
+});
+
+authRouter.post("/forgot-password", loginLimiter, async (req, res) => {
+  const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid input" });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { email: parsed.data.email.toLowerCase() } });
+  if (user && user.status === "ACTIVE") {
+    const raw = randomBytes(32).toString("hex");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordResetHash: hashToken(raw),
+        passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
+      },
+    });
+    res.cookie("reset_ticket", raw, { ...cookieOpts, maxAge: 30 * 60 * 1000 });
+  }
+  res.json({ ok: true });
+});
+
+authRouter.post("/reset-password", loginLimiter, async (req, res) => {
+  const parsed = z
+    .object({
+      password: z.string().min(8).regex(/[A-Z]/).regex(/[0-9]/).regex(/[^A-Za-z0-9]/),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid input" });
+    return;
+  }
+  const raw = req.cookies?.reset_ticket as string | undefined;
+  if (!raw) {
+    res.status(400).json({ error: "Reset link expired. Request a new one." });
+    return;
+  }
+  const user = await prisma.user.findFirst({
+    where: {
+      passwordResetHash: hashToken(raw),
+      passwordResetExpires: { gt: new Date() },
+      status: "ACTIVE",
+    },
+  });
+  if (!user) {
+    res.status(400).json({ error: "Reset link expired. Request a new one." });
+    return;
+  }
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash: await bcrypt.hash(parsed.data.password, 12),
+      passwordResetHash: null,
+      passwordResetExpires: null,
+    },
+  });
+  res.clearCookie("reset_ticket", { path: "/" });
+  res.json({ ok: true });
 });
 
 authRouter.get("/me", async (req, res) => {

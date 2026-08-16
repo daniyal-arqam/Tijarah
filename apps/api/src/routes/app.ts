@@ -45,7 +45,9 @@ appRouter.patch("/me", async (req, res) => {
       cities: z.array(z.string()).optional(),
       specialties: z.array(z.string()).optional(),
       waNumber: z.string().max(30).optional(),
+      photoUrl: z.string().max(500_000).optional(),
       legalName: z.string().min(2).max(120).optional(),
+      logoUrl: z.string().max(500_000).optional(),
       industry: z.string().max(80).optional(),
       size: z.string().max(40).optional(),
       city: z.string().max(40).optional(),
@@ -68,6 +70,7 @@ appRouter.patch("/me", async (req, res) => {
         cities: body.cities ? JSON.stringify(body.cities) : undefined,
         specialties: body.specialties ? JSON.stringify(body.specialties) : undefined,
         waNumber: body.waNumber,
+        photoUrl: body.photoUrl,
       },
     });
   }
@@ -81,6 +84,8 @@ appRouter.patch("/me", async (req, res) => {
         city: body.city,
         crNumber: body.crNumber,
         vatNumber: body.vatNumber,
+        logoUrl: body.logoUrl,
+        contactName: body.displayName,
       },
     });
   }
@@ -708,7 +713,11 @@ appRouter.get("/reviews", async (req, res) => {
       : user.role === "COMPANY"
         ? { authorId: user.id }
         : {};
-  const rows = await prisma.review.findMany({ where, include: { order: true }, orderBy: { createdAt: "desc" } });
+  const rows = await prisma.review.findMany({
+    where,
+    include: { order: { include: { company: true } } },
+    orderBy: { createdAt: "desc" },
+  });
   res.json(rows);
 });
 
