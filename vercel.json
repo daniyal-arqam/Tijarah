@@ -1,6 +1,5 @@
 {
   "framework": "nextjs",
   "installCommand": "npm install",
-  "buildCommand": "npm run build -w @tijarah/web",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- apps/web package-lock.json package.json"
+  "buildCommand": "npm run build -w @tijarah/web"
 }
