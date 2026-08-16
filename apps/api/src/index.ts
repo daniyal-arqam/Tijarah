@@ -31,6 +31,48 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
+app.get("/", (req, res) => {
+  const payload = {
+    ok: true,
+    service: "Tijarah API",
+    health: "/health",
+    app: env.frontendOrigin,
+  };
+  const wantsHtml = String(req.headers.accept ?? "").includes("text/html");
+  if (!wantsHtml) {
+    res.json(payload);
+    return;
+  }
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tijarah API</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+      font-family: system-ui, sans-serif; background: #16110e; color: #f3ece4; }
+    main { width: min(440px, 92vw); border: 1px solid #3a322c; border-radius: 16px;
+      padding: 28px; background: #1c1612; box-shadow: 0 20px 50px rgb(0 0 0 / .4); }
+    h1 { margin: 0; font-size: 1.4rem; }
+    p { margin: 10px 0 20px; color: #b5a89a; }
+    a { color: #f07a2a; }
+    .ok { display: inline-block; padding: 4px 10px; border-radius: 999px;
+      background: #1f6b3a; color: #d9ffe6; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="ok">Online</span>
+    <h1>Tijarah API</h1>
+    <p>This is the backend. Open the app to use Tijarah.</p>
+    <p><a href="${env.frontendOrigin}">Open Tijarah</a> · <a href="/health">Health</a></p>
+  </main>
+</body>
+</html>`);
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
