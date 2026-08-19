@@ -3,8 +3,10 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
 import { ZodError } from "zod";
 import { env } from "./env.js";
+import { prisma } from "./lib/prisma.js";
 import { startKeepAlive } from "./lib/keepAlive.js";
 import { remindStaleProposals } from "./lib/followUp.js";
 import { authRouter } from "./routes/auth.js";
@@ -20,13 +22,33 @@ app.disable("x-powered-by");
 app.use(
   helmet({
     hsts: env.nodeEnv === "production" ? { maxAge: 15552000, includeSubDomains: true } : false,
-    contentSecurityPolicy: false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        styleSrc: ["'unsafe-inline'"],
+        imgSrc: ["'self'", "data:"],
+        scriptSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+      },
+    },
   }),
 );
 app.use(
   cors({
     origin: env.frontendOrigin,
     credentials: true,
+  }),
+);
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path === "/health",
   }),
 );
 app.use(express.json({ limit: "1mb" }));
@@ -122,17 +144,27 @@ app.get("/track/open/:token", async (req, res) => {
 app.use("/auth", authRouter);
 app.use("/api", appRouter);
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
   if (err instanceof ZodError) {
     res.status(400).json({ error: "Invalid input" });
     return;
   }
   const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 500;
-  const expose = env.nodeEnv !== "production" && err instanceof Error ? err.message : "Server error";
-  res.status(status >= 400 && status < 500 ? status : 500).json({ error: expose });
+  if (env.nodeEnv !== "production" && err instanceof Error) {
+    console.warn(err.message);
+  }
+  res.status(status >= 400 && status < 500 ? status : 500).json({ error: "Server error" });
 });
 
-app.listen(env.port, () => {
+const server = app.listen(env.port, () => {
   console.log(`Tijarah API on http://localhost:${env.port}`);
   startKeepAlive();
   const tick = () => {
@@ -143,3 +175,14 @@ app.listen(env.port, () => {
   setTimeout(tick, 15_000);
   setInterval(tick, 5 * 60 * 1000);
 });
+
+function shutdown(signal: string) {
+  console.log(`${signal}: closing`);
+  server.close(() => {
+    void prisma.$disconnect().finally(() => process.exit(0));
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

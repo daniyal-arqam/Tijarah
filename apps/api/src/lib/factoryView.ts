@@ -53,7 +53,7 @@ export function salesmanCard(
 
 /** Buying company never sees mill identity. Selling mill never sees buyer identity. */
 export function hideMillFromBuyer<T extends Record<string, unknown>>(row: T): T {
-  const next = { ...row };
+  const next: Record<string, unknown> = { ...row };
   delete next.factory;
   delete next.millName;
   delete next.millVerified;
@@ -66,11 +66,11 @@ export function hideMillFromBuyer<T extends Record<string, unknown>>(row: T): T 
   if (next.salesman && typeof next.salesman === "object") {
     next.salesman = salesmanCard(next.salesman as Parameters<typeof salesmanCard>[0]);
   }
-  return next;
+  return next as T;
 }
 
 export function hideBuyerFromMill<T extends Record<string, unknown>>(row: T): T {
-  const next = { ...row };
+  const next: Record<string, unknown> = { ...row };
   delete next.company;
   delete next.companyId;
   delete next.companyName;
@@ -93,5 +93,5 @@ export function hideBuyerFromMill<T extends Record<string, unknown>>(row: T): T 
   if (next.order && typeof next.order === "object") {
     next.order = hideBuyerFromMill(next.order as Record<string, unknown>);
   }
-  return next;
+  return next as T;
 }

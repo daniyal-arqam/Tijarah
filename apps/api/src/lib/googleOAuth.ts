@@ -79,21 +79,29 @@ export async function fetchGoogleProfile(accessToken: string): Promise<GooglePro
   };
 }
 
+const ALG = "HS256" as const;
+
+function payload(token: string) {
+  const decoded = jwt.verify(token, env.jwtRefresh, { algorithms: [ALG] });
+  if (typeof decoded === "string") throw new Error("Invalid token");
+  return decoded as jwt.JwtPayload & { r?: string; email?: string; name?: string; picture?: string };
+}
+
 export function signOAuthState(role = "") {
-  return jwt.sign({ r: role }, env.jwtAccess, { expiresIn: "10m" });
+  return jwt.sign({ r: role }, env.jwtRefresh, { expiresIn: "10m", algorithm: ALG });
 }
 
 export function verifyOAuthState(state: string) {
-  const p = jwt.verify(state, env.jwtAccess) as { r?: string };
-  return p.r === "SALESMAN" || p.r === "COMPANY" ? p.r : "";
+  const r = payload(state).r;
+  return r === "SALESMAN" || r === "COMPANY" ? r : "";
 }
 
 export function signGooglePending(profile: GooglePending) {
-  return jwt.sign(profile, env.jwtAccess, { expiresIn: "10m" });
+  return jwt.sign(profile, env.jwtRefresh, { expiresIn: "10m", algorithm: ALG });
 }
 
 export function verifyGooglePending(token: string): GooglePending {
-  const p = jwt.verify(token, env.jwtAccess) as GooglePending;
+  const p = payload(token);
   if (!p.email || !p.name) throw new Error("Invalid pending Google profile");
-  return p;
+  return { email: String(p.email), name: String(p.name), picture: p.picture ? String(p.picture) : undefined };
 }

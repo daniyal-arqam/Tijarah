@@ -3,14 +3,20 @@ import crypto from "node:crypto";
 import { env, ACCESS_TTL, REFRESH_TTL_DAYS } from "../env.js";
 import type { Role } from "@prisma/client";
 
+const ALG = "HS256" as const;
+
 export type AccessPayload = { sub: string; role: Role };
 
 export function signAccess(payload: AccessPayload) {
-  return jwt.sign(payload, env.jwtAccess, { expiresIn: ACCESS_TTL });
+  return jwt.sign(payload, env.jwtAccess, { expiresIn: ACCESS_TTL, algorithm: ALG });
 }
 
 export function verifyAccess(token: string) {
-  return jwt.verify(token, env.jwtAccess) as AccessPayload;
+  const decoded = jwt.verify(token, env.jwtAccess, { algorithms: [ALG] });
+  if (typeof decoded === "string" || !decoded.sub || !decoded.role) {
+    throw new Error("Invalid token");
+  }
+  return decoded as AccessPayload;
 }
 
 export function newRefreshToken() {

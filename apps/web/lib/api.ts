@@ -1,14 +1,21 @@
 export async function api(path: string, init: RequestInit = {}) {
-  const res = await fetch(path, {
-    ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  });
+  const send = () =>
+    fetch(path, {
+      ...init,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    });
+
+  let res = await send();
+  if (res.status === 401 && !path.startsWith("/auth/login") && path !== "/auth/refresh" && path !== "/auth/signup") {
+    const refreshed = await fetch("/auth/refresh", { method: "POST", credentials: "include" });
+    if (refreshed.ok) res = await send();
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Request failed");
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Request failed");
   return data;
 }
 

@@ -262,7 +262,7 @@ export default function ProfilePage() {
                   </div>
                 </Field>
                 {slug && (
-                  <a className="block text-sm text-primary" href={`/p/${slug}`} target="_blank">
+                  <a className="block text-sm text-primary" href={`/p/${slug}`} target="_blank" rel="noopener noreferrer">
                     {t.publicLink}
                   </a>
                 )}

@@ -20,6 +20,8 @@ import {
   type GoogleProfile,
 } from "../lib/googleOAuth.js";
 import type { Role } from "@prisma/client";
+import { publicUser } from "../lib/publicUser.js";
+import { appOrigin, escapeHtml, sendMail } from "../lib/mail.js";
 
 export const authRouter = Router();
 
@@ -29,6 +31,13 @@ const cookieOpts = {
   secure: env.cookieSecure,
   path: "/",
 };
+
+function clearAuthCookies(res: import("express").Response) {
+  res.clearCookie("access", cookieOpts);
+  res.clearCookie("refresh", cookieOpts);
+  res.clearCookie("google_pending", cookieOpts);
+  res.clearCookie("reset_ticket", cookieOpts);
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -122,11 +131,11 @@ const signupSchema = z.object({
 authRouter.post("/signup", loginLimiter, async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    res.status(400).json({ error: "Invalid input" });
     return;
   }
   const { email, password, role, name } = parsed.data;
-  const exists = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+  const exists = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
   if (exists) {
     res.status(409).json({ error: "Email already registered" });
     return;
@@ -134,7 +143,7 @@ authRouter.post("/signup", loginLimiter, async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
     data: {
-      email: email.toLowerCase(),
+      email: email.toLowerCase().trim(),
       passwordHash,
       role,
       emailVerified: true,
@@ -149,14 +158,7 @@ authRouter.post("/signup", loginLimiter, async (req, res) => {
   });
   if (user.salesman) await recalcTrustScore(user.salesman.id);
   await issueRefresh(res, user.id, user.role);
-  res.status(201).json({
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    salesman: user.salesman,
-    company: user.company,
-    factory: user.factory,
-  });
+  res.status(201).json(publicUser(user));
 });
 
 const loginSchema = z.object({
@@ -171,7 +173,7 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     return;
   }
   const user = await prisma.user.findUnique({
-    where: { email: parsed.data.email.toLowerCase() },
+    where: { email: parsed.data.email.toLowerCase().trim() },
     include: { salesman: { include: { factory: true } }, company: true, factory: true },
   });
   if (!user || user.status !== "ACTIVE") {
@@ -184,15 +186,7 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     return;
   }
   await issueRefresh(res, user.id, user.role);
-  res.json({
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    locale: user.locale,
-    salesman: user.salesman,
-    company: user.company,
-    factory: user.factory,
-  });
+  res.json(publicUser(user));
 });
 
 authRouter.get("/google", oauthLimiter, (req, res) => {
@@ -299,15 +293,9 @@ authRouter.post("/google/complete", oauthLimiter, async (req, res) => {
       { ...pending, sub: pending.email, name: parsed.data.name?.trim() || pending.name },
       parsed.data.role,
     );
-    res.clearCookie("google_pending", { path: "/" });
+    res.clearCookie("google_pending", cookieOpts);
     await issueRefresh(res, user.id, user.role);
-    res.status(201).json({
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      salesman: user.salesman,
-      company: user.company,
-    });
+    res.status(201).json(publicUser(user));
   } catch {
     res.status(400).json({ error: "Google signup expired. Try again." });
   }
@@ -321,22 +309,26 @@ authRouter.post("/logout", async (req, res) => {
       data: { revoked: true },
     });
   }
-  res.clearCookie("access", { path: "/" });
-  res.clearCookie("refresh", { path: "/" });
+  clearAuthCookies(res);
   res.json({ ok: true });
 });
 
-authRouter.post("/refresh", async (req, res) => {
+authRouter.post("/refresh", oauthLimiter, async (req, res) => {
   const raw = req.cookies?.refresh as string | undefined;
   if (!raw) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+  const tokenHash = hashToken(raw);
   const row = await prisma.refreshToken.findFirst({
-    where: { tokenHash: hashToken(raw), revoked: false, expiresAt: { gt: new Date() } },
+    where: { tokenHash, revoked: false, expiresAt: { gt: new Date() } },
     include: { user: true },
   });
   if (!row || row.user.status !== "ACTIVE") {
+    const reused = await prisma.refreshToken.findFirst({ where: { tokenHash, revoked: true } });
+    if (reused) {
+      await prisma.refreshToken.updateMany({ where: { userId: reused.userId }, data: { revoked: true } });
+    }
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
@@ -351,9 +343,11 @@ authRouter.post("/forgot-password", loginLimiter, async (req, res) => {
     res.status(400).json({ error: "Invalid input" });
     return;
   }
-  const user = await prisma.user.findUnique({ where: { email: parsed.data.email.toLowerCase() } });
+  const user = await prisma.user.findUnique({ where: { email: parsed.data.email.toLowerCase().trim() } });
+  let resetToken: string | undefined;
   if (user && user.status === "ACTIVE") {
     const raw = randomBytes(32).toString("hex");
+    resetToken = raw;
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -361,29 +355,31 @@ authRouter.post("/forgot-password", loginLimiter, async (req, res) => {
         passwordResetExpires: new Date(Date.now() + 30 * 60 * 1000),
       },
     });
-    res.cookie("reset_ticket", raw, { ...cookieOpts, maxAge: 30 * 60 * 1000 });
+    const link = `${appOrigin()}/forgot-password?token=${raw}`;
+    await sendMail({
+      to: user.email,
+      subject: "Reset your Tijarah password",
+      text: `Reset your password (valid 30 minutes):\n${link}\nIf you did not request this, ignore this email.`,
+      html: `<p>Reset your password (valid 30 minutes):</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>`,
+    });
   }
-  res.json({ ok: true });
+  res.json(env.nodeEnv === "production" ? { ok: true } : { ok: true, resetToken });
 });
 
 authRouter.post("/reset-password", loginLimiter, async (req, res) => {
   const parsed = z
     .object({
       password: z.string().min(8).regex(/[A-Z]/).regex(/[0-9]/).regex(/[^A-Za-z0-9]/),
+      token: z.string().min(20).max(128),
     })
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
     return;
   }
-  const raw = req.cookies?.reset_ticket as string | undefined;
-  if (!raw) {
-    res.status(400).json({ error: "Reset link expired. Request a new one." });
-    return;
-  }
   const user = await prisma.user.findFirst({
     where: {
-      passwordResetHash: hashToken(raw),
+      passwordResetHash: hashToken(parsed.data.token),
       passwordResetExpires: { gt: new Date() },
       status: "ACTIVE",
     },
@@ -392,15 +388,19 @@ authRouter.post("/reset-password", loginLimiter, async (req, res) => {
     res.status(400).json({ error: "Reset link expired. Request a new one." });
     return;
   }
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      passwordHash: await bcrypt.hash(parsed.data.password, 12),
-      passwordResetHash: null,
-      passwordResetExpires: null,
-    },
-  });
-  res.clearCookie("reset_ticket", { path: "/" });
+  const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        passwordResetHash: null,
+        passwordResetExpires: null,
+      },
+    }),
+    prisma.refreshToken.updateMany({ where: { userId: user.id }, data: { revoked: true } }),
+  ]);
+  clearAuthCookies(res);
   res.json({ ok: true });
 });
 
@@ -417,19 +417,11 @@ authRouter.get("/me", async (req, res) => {
       where: { id: payload.sub },
       include: { salesman: { include: { factory: true } }, company: true, factory: true },
     });
-    if (!user) {
+    if (!user || user.status !== "ACTIVE") {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    res.json({
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      locale: user.locale,
-      salesman: user.salesman,
-      company: user.company,
-      factory: user.factory,
-    });
+    res.json(publicUser(user));
   } catch {
     res.status(401).json({ error: "Unauthorized" });
   }

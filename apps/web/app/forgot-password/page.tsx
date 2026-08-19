@@ -1,24 +1,39 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useI18n } from "@/components/Providers";
 import { BrandMark } from "@/components/marketing/BrandMark";
 
-export default function ForgotPassword() {
+function Form() {
   const { t } = useI18n();
+  const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [token, setToken] = useState("");
   const [step, setStep] = useState<"ask" | "reset">("ask");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const q = params.get("token");
+    if (q) {
+      setToken(q);
+      setStep("reset");
+    }
+  }, [params]);
 
   async function requestLink(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
     try {
-      await api("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+      const data = (await api("/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      })) as { ok: boolean; resetToken?: string };
+      if (data.resetToken) setToken(data.resetToken);
       setStep("reset");
       setMsg(t.resetSent);
     } catch (ex) {
@@ -29,8 +44,12 @@ export default function ForgotPassword() {
   async function savePassword(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
+    if (!token) {
+      setErr("Reset link expired. Request a new one.");
+      return;
+    }
     try {
-      await api("/auth/reset-password", { method: "POST", body: JSON.stringify({ password }) });
+      await api("/auth/reset-password", { method: "POST", body: JSON.stringify({ password, token }) });
       setMsg("Password updated. You can sign in.");
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "Failed");
@@ -70,5 +89,13 @@ export default function ForgotPassword() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function ForgotPassword() {
+  return (
+    <Suspense>
+      <Form />
+    </Suspense>
   );
 }

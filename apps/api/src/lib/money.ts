@@ -15,7 +15,7 @@ export function salesmanProfit(sellSubtotal: number, factoryCost: number) {
 }
 
 export function serializeQuote(
-  quote: Quote & { lines: QuoteLine[]; salesman?: SalesmanProfile | null; rfq?: { salesman?: SalesmanProfile | null } },
+  quote: Quote & { lines: QuoteLine[]; salesman?: SalesmanProfile | null; rfq?: unknown },
   role: Role,
 ) {
   const totals = quoteTotals(quote.lines, quote.discount);
