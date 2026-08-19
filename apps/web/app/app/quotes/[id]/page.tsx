@@ -10,7 +10,7 @@ type Quote = {
   status: string;
   version: number;
   factoryCostEstimate?: number;
-  margin?: number;
+  profit?: number;
   subtotal: number;
   vat: number;
   total: number;
@@ -62,9 +62,13 @@ export default function QuoteDetail() {
             <span>{t.factoryCost}</span>
             <span>{q.factoryCostEstimate.toLocaleString()} SAR</span>
           </div>
-          <div className="flex justify-between">
-            <span>{t.margin}</span>
-            <span>{q.margin?.toLocaleString()} SAR</span>
+          <div className="mt-1 flex justify-between">
+            <span>{t.companySees}</span>
+            <span>{q.subtotal.toLocaleString()} SAR</span>
+          </div>
+          <div className="mt-1 flex justify-between font-semibold text-molten">
+            <span>{t.yourProfit}</span>
+            <span>{(q.profit ?? q.subtotal - q.factoryCostEstimate).toLocaleString()} SAR</span>
           </div>
         </div>
       )}

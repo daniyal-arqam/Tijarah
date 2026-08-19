@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   SALESMAN
   COMPANY
+  FACTORY
   ADMIN
 }
 
@@ -76,6 +77,20 @@ enum PaymentMethod {
   CHEQUE
 }
 
+enum ProposalStatus {
+  SENT
+  OPENED
+  SELECTED
+  DECLINED
+}
+
+enum EstimateStatus {
+  REQUESTED
+  QUOTED
+  ACCEPTED
+  DECLINED
+}
+
 model User {
   id            String     @id @default(cuid())
   email         String     @unique
@@ -94,6 +109,7 @@ model User {
   refreshTokens RefreshToken[]
   salesman      SalesmanProfile?
   company       CompanyProfile?
+  factory       FactoryProfile?
   credentials   Credential[]
   messages      Message[]
   notifications Notification[]
@@ -111,19 +127,51 @@ model RefreshToken {
   @@index([userId])
 }
 
+model FactoryProfile {
+  id            String  @id @default(cuid())
+  userId        String  @unique
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legalName     String
+  tradeName     String?
+  city          String?
+  crNumber      String?
+  vatNumber     String?
+  phone         String?
+  address       String?
+  about         String?
+  specialties   String  @default("[]")
+  capacityTons  Int     @default(0)
+  logoUrl       String?
+  verified      Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  salesmen  SalesmanProfile[]
+  estimates FactoryEstimate[]
+  orders    Order[]
+  proposals Proposal[]
+}
+
 model SalesmanProfile {
-  id               String   @id @default(cuid())
-  userId           String   @unique
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  displayName      String
-  slug             String   @unique
-  bio              String?
-  photoUrl         String?
-  yearsExperience  Int      @default(0)
-  cities           String   @default("[]")
-  specialties      String   @default("[]")
-  trustScore       Int      @default(10)
-  waNumber         String?
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  factoryId         String?
+  factory           FactoryProfile? @relation(fields: [factoryId], references: [id], onDelete: SetNull)
+  displayName       String
+  slug              String   @unique
+  bio               String?
+  photoUrl          String?
+  title             String?
+  languages         String   @default("[\"Arabic\",\"English\"]")
+  certifications    String?
+  coverageNotes     String?
+  yearsExperience   Int      @default(0)
+  cities            String   @default("[]")
+  specialties       String   @default("[]")
+  trustScore      Int      @default(4)
+  waNumber        String?
+  commissionPercent Float  @default(0)
 
   leadLists LeadList[]
   invites   Invite[]
@@ -131,6 +179,8 @@ model SalesmanProfile {
   quotes    Quote[]
   orders    Order[]
   reviews   Review[]
+  proposals Proposal[]
+  estimates FactoryEstimate[]
 }
 
 model CompanyProfile {
@@ -152,6 +202,7 @@ model CompanyProfile {
   invites   Invite[]
   rfqs      Rfq[]
   orders    Order[]
+  proposals Proposal[]
 }
 
 model Credential {
@@ -201,23 +252,26 @@ model Invite {
 }
 
 model Rfq {
-  id               String          @id @default(cuid())
+  id               String           @id @default(cuid())
   companyId        String
-  company          CompanyProfile  @relation(fields: [companyId], references: [id])
-  salesmanId       String
-  salesman         SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  company          CompanyProfile   @relation(fields: [companyId], references: [id])
+  salesmanId       String?
+  salesman         SalesmanProfile? @relation(fields: [salesmanId], references: [id])
   title            String
   specialty        String
   specs            String
   quantity         Float
-  unit             String          @default("pcs")
+  unit             String           @default("pcs")
   destinationCity  String
   neededBy         DateTime?
   fileUrl          String?
-  status           String          @default("OPEN")
-  createdAt        DateTime        @default(now())
+  customize        Boolean          @default(false)
+  status           String           @default("OPEN")
+  createdAt        DateTime         @default(now())
   quotes           Quote[]
   messages         Message[]
+  estimates        FactoryEstimate[]
+  proposals        Proposal[]
 }
 
 model Quote {
@@ -231,7 +285,7 @@ model Quote {
   paymentTerms         PaymentTerms    @default(NET_30)
   deliveryDate         DateTime?
   notes                String?
-  factoryCostEstimate  Float
+  factoryCostEstimate  Float           @default(0)
   discount             Float           @default(0)
   counterTotal         Float?
   counterDate          DateTime?
@@ -250,22 +304,26 @@ model QuoteLine {
 }
 
 model Order {
-  id           String          @id @default(cuid())
-  quoteId      String          @unique
-  quote        Quote           @relation(fields: [quoteId], references: [id])
-  salesmanId   String
-  salesman     SalesmanProfile @relation(fields: [salesmanId], references: [id])
-  companyId    String
-  company      CompanyProfile  @relation(fields: [companyId], references: [id])
-  status       OrderStatus     @default(CONFIRMED)
-  promisedDate DateTime?
-  deliveredAt  DateTime?
-  receivedAt   DateTime?
-  createdAt    DateTime        @default(now())
-  events       OrderEvent[]
-  invoice      Invoice?
-  review       Review?
-  messages     Message[]
+  id            String          @id @default(cuid())
+  quoteId       String          @unique
+  quote         Quote           @relation(fields: [quoteId], references: [id])
+  salesmanId    String
+  salesman      SalesmanProfile @relation(fields: [salesmanId], references: [id])
+  companyId     String
+  company       CompanyProfile  @relation(fields: [companyId], references: [id])
+  factoryId     String?
+  factory       FactoryProfile? @relation(fields: [factoryId], references: [id])
+  factoryCost   Float           @default(0)
+  factoryPaidAt DateTime?
+  status        OrderStatus     @default(CONFIRMED)
+  promisedDate  DateTime?
+  deliveredAt   DateTime?
+  receivedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  events        OrderEvent[]
+  invoice       Invoice?
+  reviews       Review[]
+  messages      Message[]
 }
 
 model OrderEvent {
@@ -305,12 +363,13 @@ model Payment {
 
 model Review {
   id               String          @id @default(cuid())
-  orderId          String          @unique
+  orderId          String
   order            Order           @relation(fields: [orderId], references: [id])
   salesmanId       String
   salesman         SalesmanProfile @relation(fields: [salesmanId], references: [id])
   authorId         String
   author           User            @relation("ReviewAuthor", fields: [authorId], references: [id])
+  authorRole       Role            @default(COMPANY)
   quality          Int
   deliverySpeed    Int
   professionalism  Int
@@ -319,6 +378,8 @@ model Review {
   response         String?
   archived         Boolean         @default(false)
   createdAt        DateTime        @default(now())
+
+  @@unique([orderId, authorId])
 }
 
 model Message {
@@ -340,6 +401,57 @@ model Notification {
   type      String
   title     String
   body      String
+  link      String?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model FactoryEstimate {
+  id          String          @id @default(cuid())
+  rfqId       String
+  rfq         Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  factoryId   String
+  factory     FactoryProfile  @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  salesmanId  String
+  salesman    SalesmanProfile @relation(fields: [salesmanId], references: [id], onDelete: Cascade)
+  amount      Float?
+  readyBy     DateTime?
+  notes       String?
+  status      EstimateStatus  @default(REQUESTED)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  proposals   Proposal[]
+
+  @@index([salesmanId, rfqId])
+  @@index([factoryId, status])
+}
+
+model Proposal {
+  id                 String          @id @default(cuid())
+  salesmanId         String
+  salesman           SalesmanProfile @relation(fields: [salesmanId], references: [id], onDelete: Cascade)
+  companyId          String
+  company            CompanyProfile  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  rfqId              String?
+  rfq                Rfq?            @relation(fields: [rfqId], references: [id], onDelete: SetNull)
+  factoryId          String?
+  factory            FactoryProfile? @relation(fields: [factoryId], references: [id], onDelete: SetNull)
+  factoryEstimateId  String?
+  factoryEstimate    FactoryEstimate? @relation(fields: [factoryEstimateId], references: [id], onDelete: SetNull)
+  subject            String
+  body               String
+  sellPrice          Float?
+  factoryCost        Float?
+  readyBy            DateTime?
+  trackingToken      String          @unique
+  status             ProposalStatus  @default(SENT)
+  sentAt             DateTime        @default(now())
+  openedAt           DateTime?
+  followUpNotifiedAt DateTime?
+  selectedAt         DateTime?
+  createdAt          DateTime        @default(now())
+
+  @@index([companyId, sentAt])
+  @@index([salesmanId, sentAt])
+  @@index([rfqId])
 }

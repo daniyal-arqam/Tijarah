@@ -15,6 +15,7 @@ type Quote = {
   paymentTerms?: string;
   deliveryDate?: string;
   rfq?: { title: string; company?: { legalName: string } };
+  salesman?: { displayName: string };
 };
 
 function terms(v?: string) {
@@ -25,8 +26,10 @@ function terms(v?: string) {
 export default function QuotesPage() {
   const { t } = useI18n();
   const [rows, setRows] = useState<Quote[]>([]);
+  const [role, setRole] = useState("");
   const [filter, setFilter] = useState("ALL");
   useEffect(() => {
+    api("/auth/me").then((u) => setRole(u.role)).catch(() => null);
     api("/api/quotes").then(setRows).catch(() => setRows([]));
   }, []);
   const shown = rows.filter((q) => filter === "ALL" || q.status === filter);
@@ -56,7 +59,7 @@ export default function QuotesPage() {
           <thead className="text-muted-foreground">
             <tr>
               <th className="p-4">{t.quotes}</th>
-              <th>{t.company}</th>
+              <th>{role === "COMPANY" ? t.salesman : t.company}</th>
               <th>{t.productLine}</th>
               <th>{t.delivery}</th>
               <th>{t.terms}</th>
@@ -69,7 +72,7 @@ export default function QuotesPage() {
             {shown.map((q) => (
               <tr key={q.id} className="border-t border-border">
                 <td className="p-4 font-mono-ui text-xs">Q-{q.id.slice(-4).toUpperCase()}</td>
-                <td>{q.rfq?.company?.legalName ?? "—"}</td>
+                <td>{role === "COMPANY" ? q.salesman?.displayName ?? "—" : q.rfq?.company?.legalName ?? "—"}</td>
                 <td>{q.rfq?.title}</td>
                 <td>{q.deliveryDate ? q.deliveryDate.slice(0, 10) : "—"}</td>
                 <td>{terms(q.paymentTerms)}</td>

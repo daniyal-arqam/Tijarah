@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { ZodError } from "zod";
 import { env } from "./env.js";
 import { startKeepAlive } from "./lib/keepAlive.js";
+import { remindStaleProposals } from "./lib/followUp.js";
 import { authRouter } from "./routes/auth.js";
 import { appRouter } from "./routes/app.js";
 
@@ -83,42 +84,39 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/public/salesmen/:slug", async (req, res) => {
-  const { prisma } = await import("./lib/prisma.js");
-  const s = await prisma.salesmanProfile.findUnique({
-    where: { slug: String(req.params.slug) },
-    include: { reviews: { where: { archived: false } } },
-  });
+  const { salesmanPublicPayload } = await import("./lib/salesmanPublic.js");
+  const s = await salesmanPublicPayload(String(req.params.slug));
   if (!s) {
     res.status(404).json({ error: "Not found" });
     return;
   }
-  const parse = (raw: string) => {
-    try {
-      const v = JSON.parse(raw);
-      return Array.isArray(v) ? v : [];
-    } catch {
-      return [];
-    }
-  };
-  res.json({
-    displayName: s.displayName,
-    slug: s.slug,
-    bio: s.bio,
-    yearsExperience: s.yearsExperience,
-    cities: parse(s.cities),
-    specialties: parse(s.specialties),
-    trustScore: s.trustScore,
-    waNumber: s.waNumber,
-    photoUrl: s.photoUrl,
-    reviews: s.reviews.map((r) => ({
-      quality: r.quality,
-      deliverySpeed: r.deliverySpeed,
-      professionalism: r.professionalism,
-      body: r.body,
-      wouldOrderAgain: r.wouldOrderAgain,
-      createdAt: r.createdAt,
-    })),
+  res.json(s);
+});
+
+app.get("/track/open/:token", async (req, res) => {
+  const { prisma } = await import("./lib/prisma.js");
+  const { notify } = await import("./lib/notify.js");
+  const p = await prisma.proposal.findUnique({
+    where: { trackingToken: String(req.params.token) },
+    include: { salesman: true, company: true },
   });
+  if (p && !p.openedAt) {
+    await prisma.proposal.update({
+      where: { id: p.id },
+      data: { openedAt: new Date(), status: p.status === "SENT" ? "OPENED" : p.status },
+    });
+    await notify(
+      p.salesman.userId,
+      "EMAIL_OPEN",
+      "Proposal opened",
+      `${p.company.legalName} opened your email.`,
+      "/app/outreach",
+    );
+  }
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  res.setHeader("Content-Type", "image/gif");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.send(gif);
 });
 
 app.use("/auth", authRouter);
@@ -137,4 +135,11 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 app.listen(env.port, () => {
   console.log(`Tijarah API on http://localhost:${env.port}`);
   startKeepAlive();
+  const tick = () => {
+    void remindStaleProposals().catch((err) =>
+      console.warn("Follow-up check failed:", err instanceof Error ? err.message : err),
+    );
+  };
+  setTimeout(tick, 15_000);
+  setInterval(tick, 5 * 60 * 1000);
 });

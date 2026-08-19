@@ -15,8 +15,27 @@ export async function api(path: string, init: RequestInit = {}) {
 export type Me = {
   id: string;
   email: string;
-  role: "SALESMAN" | "COMPANY" | "ADMIN";
+  role: "SALESMAN" | "COMPANY" | "FACTORY" | "ADMIN";
   locale?: string;
-  salesman?: { id: string; displayName: string; slug: string; trustScore: number; photoUrl?: string | null; bio?: string; firmName?: string; specialties?: string } | null;
+  salesman?: {
+    id: string;
+    displayName: string;
+    slug: string;
+    trustScore: number;
+    photoUrl?: string | null;
+    bio?: string;
+    title?: string;
+    firmName?: string;
+    specialties?: string;
+    cities?: string;
+    yearsExperience?: number;
+    waNumber?: string | null;
+    factory?: { id: string; legalName: string; verified?: boolean } | null;
+    factoryId?: string | null;
+    languages?: string;
+    certifications?: string | null;
+    coverageNotes?: string | null;
+  } | null;
   company?: { id: string; legalName: string; city?: string; logoUrl?: string | null; contactName?: string } | null;
+  factory?: { id: string; legalName: string; city?: string | null; verified?: boolean } | null;
 };

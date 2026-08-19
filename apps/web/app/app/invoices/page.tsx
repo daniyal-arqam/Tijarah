@@ -12,7 +12,7 @@ type Invoice = {
   vat: number;
   subtotal: number;
   status: string;
-  order?: { company?: { legalName: string } };
+  order?: { company?: { legalName: string }; salesman?: { displayName: string } };
 };
 
 export default function InvoicesPage() {
@@ -33,7 +33,9 @@ export default function InvoicesPage() {
               <div>
                 <div className="text-xs text-muted-foreground">{t.taxInvoice}</div>
                 <div className="text-xl font-semibold">{i.number}</div>
-                <div className="text-sm text-muted-foreground">{i.order?.company?.legalName}</div>
+                <div className="text-sm text-muted-foreground">
+                  {me?.role === "COMPANY" ? i.order?.salesman?.displayName : i.order?.company?.legalName}
+                </div>
               </div>
               <div className="text-end">
                 <div className="text-2xl font-semibold text-molten">{i.total.toLocaleString()} SAR</div>
@@ -52,6 +54,20 @@ export default function InvoicesPage() {
                 }}
               >
                 {t.recordTransfer}
+              </button>
+            )}
+            {me?.role === "COMPANY" && i.status !== "PAID" && (
+              <button
+                className="btn-molten mt-4 text-sm"
+                onClick={async () => {
+                  await api(`/api/invoices/${i.id}/pay`, {
+                    method: "POST",
+                    body: JSON.stringify({ amount: i.total, method: "BANK_TRANSFER" }),
+                  });
+                  setRows(await api("/api/invoices"));
+                }}
+              >
+                {t.paySalesman}
               </button>
             )}
           </article>

@@ -7,4 +7,6 @@ dist
 *.db-journal
 .DS_Store
 apps/api/prisma/dev.db
+apps/api/prisma/schema.local.prisma
+apps/api/prisma/.seeded
 apps/web/.next

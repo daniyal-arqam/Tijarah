@@ -3,10 +3,14 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
-import { serializeQuote, serializeOrder, quoteTotals } from "../lib/money.js";
-import { recalcTrustScore } from "../lib/trustScore.js";
+import { serializeQuote, serializeOrder, quoteTotals, salesmanProfit } from "../lib/money.js";
+import { recalcTrustScore, trustTen } from "../lib/trustScore.js";
 import { publicUser } from "../lib/publicUser.js";
 import { stripHtml } from "../lib/sanitize.js";
+import { publicFactory, salesmanCard } from "../lib/factoryView.js";
+import { notify } from "../lib/notify.js";
+import { appOrigin, proposalEmail, sendMail } from "../lib/mail.js";
+import { salesmanPublicPayload } from "../lib/salesmanPublic.js";
 import type { OrderStatus, PaymentTerms, QuoteStatus } from "@prisma/client";
 
 export const appRouter = Router();
@@ -28,9 +32,23 @@ appRouter.get("/me", async (req, res) => {
   const { user } = req as AuthedRequest;
   const row = await prisma.user.findUnique({
     where: { id: user.id },
-    include: { salesman: true, company: true },
+    include: { salesman: { include: { factory: true } }, company: true, factory: true },
   });
-  res.json(publicUser(row));
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const base = publicUser(row) as Record<string, unknown>;
+  if (row.salesman) {
+    const { commissionPercent: _unused, ...sm } = row.salesman;
+    base.salesman = {
+      ...sm,
+      trustScore: trustTen(row.salesman.trustScore),
+      factory: user.role === "SALESMAN" || user.role === "ADMIN" ? publicFactory(row.salesman.factory) : null,
+    };
+  }
+  if (row.factory) base.factory = publicFactory(row.factory);
+  res.json(base);
 });
 
 appRouter.patch("/me", async (req, res) => {
@@ -53,6 +71,15 @@ appRouter.patch("/me", async (req, res) => {
       city: z.string().max(40).optional(),
       crNumber: z.string().max(40).optional(),
       vatNumber: z.string().max(40).optional(),
+      title: z.string().max(80).optional(),
+      languages: z.array(z.string()).optional(),
+      certifications: z.string().max(400).optional(),
+      coverageNotes: z.string().max(1000).optional(),
+      factoryId: z.string().optional(),
+      about: z.string().max(2000).optional(),
+      address: z.string().max(200).optional(),
+      capacityTons: z.number().int().min(0).max(1e7).optional(),
+      tradeName: z.string().max(120).optional(),
     })
     .parse(req.body);
 
@@ -71,6 +98,11 @@ appRouter.patch("/me", async (req, res) => {
         specialties: body.specialties ? JSON.stringify(body.specialties) : undefined,
         waNumber: body.waNumber,
         photoUrl: body.photoUrl,
+        title: body.title,
+        languages: body.languages ? JSON.stringify(body.languages) : undefined,
+        certifications: body.certifications,
+        coverageNotes: body.coverageNotes,
+        factoryId: body.factoryId === "" ? null : body.factoryId,
       },
     });
   }
@@ -89,9 +121,27 @@ appRouter.patch("/me", async (req, res) => {
       },
     });
   }
+  if (user.role === "FACTORY") {
+    await prisma.factoryProfile.update({
+      where: { userId: user.id },
+      data: {
+        legalName: body.legalName,
+        tradeName: body.tradeName,
+        city: body.city,
+        crNumber: body.crNumber,
+        vatNumber: body.vatNumber,
+        phone: body.phone,
+        address: body.address,
+        about: body.about,
+        specialties: body.specialties ? JSON.stringify(body.specialties) : undefined,
+        capacityTons: body.capacityTons,
+        logoUrl: body.logoUrl,
+      },
+    });
+  }
   const row = await prisma.user.findUnique({
     where: { id: user.id },
-    include: { salesman: true, company: true },
+    include: { salesman: { include: { factory: true } }, company: true, factory: true },
   });
   res.json(publicUser(row));
 });
@@ -99,7 +149,10 @@ appRouter.patch("/me", async (req, res) => {
 appRouter.get("/dashboard", async (req, res) => {
   const { user } = req as AuthedRequest;
   if (user.role === "SALESMAN") {
-    const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+    const sm = await prisma.salesmanProfile.findUnique({
+      where: { userId: user.id },
+      include: { factory: true },
+    });
     if (!sm) {
       res.status(404).json({ error: "No profile" });
       return;
@@ -118,18 +171,21 @@ appRouter.get("/dashboard", async (req, res) => {
     const onTime =
       received.filter((o) => o.promisedDate && o.deliveredAt && o.deliveredAt <= o.promisedDate).length /
       Math.max(1, received.filter((o) => o.promisedDate && o.deliveredAt).length);
-    const margin = quotes
+    const profitEarned = quotes
       .filter((q) => q.status === "ACCEPTED")
-      .reduce((s, q) => s + quoteTotals(q.lines, q.discount).subtotal - q.factoryCostEstimate, 0);
+      .reduce((s, q) => s + salesmanProfit(quoteTotals(q.lines, q.discount).subtotal, q.factoryCostEstimate), 0);
+    const openNeeds = await prisma.rfq.count({ where: { status: "OPEN", salesmanId: null } });
     res.json({
-      trustScore: sm.trustScore,
+      trustScore: trustTen(sm.trustScore),
       paidRevenue: paid,
       ordersThisMonth: ordersMonth,
       openQuotes: quotes.filter((q) => ["SENT", "VIEWED", "COUNTERED"].includes(q.status)).length,
       pendingDeliveries: orders.filter((o) => !["RECEIVED"].includes(o.status)).length,
       onTimePct: Math.round(onTime * 100),
-      privateMargin: Math.round(margin * 100) / 100,
-      openRfqs: rfqs.length,
+      profitEarned,
+      millName: sm.factory?.legalName ?? null,
+      openRfqs: rfqs.length + openNeeds,
+      openNeeds,
       recentOrders: orders.slice(0, 6).map((o) => serializeOrder(o, user.role)),
       recentQuotes: quotes.slice(0, 6).map((q) => serializeQuote(q, user.role)),
     });
@@ -159,8 +215,42 @@ appRouter.get("/dashboard", async (req, res) => {
       spendThisMonth: spend,
       inProgress: orders.filter((o) => o.status !== "RECEIVED").length,
       openRfqs: rfqs.filter((r) => r.status === "OPEN").length,
+      openProposals: await prisma.proposal.count({ where: { companyId: co.id, status: { in: ["SENT", "OPENED"] } } }),
       orders: orders.map((o) => serializeOrder(o, user.role)),
       invoices,
+    });
+    return;
+  }
+  if (user.role === "FACTORY") {
+    const mill = await prisma.factoryProfile.findUnique({
+      where: { userId: user.id },
+      include: { salesmen: { include: { orders: true } } },
+    });
+    if (!mill) {
+      res.status(404).json({ error: "No profile" });
+      return;
+    }
+    const jobs = await prisma.order.findMany({
+      where: { factoryId: mill.id },
+      include: { salesman: true, quote: { include: { lines: true, rfq: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    const pendingEstimates = await prisma.factoryEstimate.count({
+      where: { factoryId: mill.id, status: "REQUESTED" },
+    });
+    const unpaid = jobs.filter((j) => !j.factoryPaidAt).reduce((s, j) => s + j.factoryCost, 0);
+    const paidMill = jobs.filter((j) => j.factoryPaidAt).reduce((s, j) => s + j.factoryCost, 0);
+    res.json({
+      mill: publicFactory(mill),
+      pendingEstimates,
+      openJobs: jobs.filter((j) => j.status !== "RECEIVED").length,
+      unpaidMill: unpaid,
+      paidMill,
+      recentJobs: jobs.slice(0, 8).map((o) => serializeOrder(o, user.role)),
+      salesmen: mill.salesmen.map((s) => ({
+        ...salesmanCard(s),
+        orders: s.orders.filter((o) => o.factoryId === mill.id).length || s.orders.length,
+      })),
     });
     return;
   }
@@ -251,7 +341,10 @@ appRouter.get("/salesmen", requireRole("COMPANY", "ADMIN"), async (req, res) => 
   const specialty = String(req.query.specialty ?? "");
   const city = String(req.query.city ?? "");
   const rows = await prisma.salesmanProfile.findMany({
-    include: { reviews: { where: { archived: false } }, user: { select: { emailVerified: true, phoneVerified: true } } },
+    include: {
+      reviews: { where: { archived: false } },
+      user: { select: { emailVerified: true, phoneVerified: true } },
+    },
   });
   const mapped = rows
     .map((s) => {
@@ -262,7 +355,7 @@ appRouter.get("/salesmen", requireRole("COMPANY", "ADMIN"), async (req, res) => 
       else if (!specialty) match += 20;
       if (city && cities.includes(city)) match += 30;
       else if (co?.city && cities.includes(co.city)) match += 30;
-      match += Math.round((s.trustScore / 100) * 15);
+      match += Math.round((trustTen(s.trustScore) / 10) * 15);
       const avg =
         s.reviews.length === 0
           ? 0
@@ -273,9 +366,12 @@ appRouter.get("/salesmen", requireRole("COMPANY", "ADMIN"), async (req, res) => 
         id: s.id,
         displayName: s.displayName,
         slug: s.slug,
+        bio: s.bio,
+        photoUrl: s.photoUrl,
+        yearsExperience: s.yearsExperience,
         cities,
         specialties: specs,
-        trustScore: s.trustScore,
+        trustScore: trustTen(s.trustScore),
         match: Math.min(100, match),
         rating: Math.round(avg * 10) / 10,
         reviewCount: s.reviews.length,
@@ -286,29 +382,16 @@ appRouter.get("/salesmen", requireRole("COMPANY", "ADMIN"), async (req, res) => 
 });
 
 appRouter.get("/salesmen/public/:slug", async (req, res) => {
-  const s = await prisma.salesmanProfile.findUnique({
-    where: { slug: req.params.slug },
-    include: { reviews: { where: { archived: false } } },
-  });
+  const s = await salesmanPublicPayload(req.params.slug);
   if (!s) {
     res.status(404).json({ error: "Not found" });
     return;
   }
-  res.json({
-    displayName: s.displayName,
-    slug: s.slug,
-    bio: s.bio,
-    yearsExperience: s.yearsExperience,
-    cities: parseJsonArr(s.cities),
-    specialties: parseJsonArr(s.specialties),
-    trustScore: s.trustScore,
-    waNumber: s.waNumber,
-    reviews: s.reviews,
-  });
+  res.json(s);
 });
 
 const rfqSchema = z.object({
-  salesmanId: z.string().min(1),
+  salesmanId: z.string().optional(),
   title: text,
   specialty: z.string().min(1),
   specs: text,
@@ -316,6 +399,7 @@ const rfqSchema = z.object({
   unit: z.string().max(20).default("pcs"),
   destinationCity: z.string().min(1),
   neededBy: z.string().optional(),
+  customize: z.boolean().optional(),
 });
 
 appRouter.post("/rfqs", requireRole("COMPANY"), async (req, res) => {
@@ -325,7 +409,7 @@ appRouter.post("/rfqs", requireRole("COMPANY"), async (req, res) => {
   const rfq = await prisma.rfq.create({
     data: {
       companyId: co!.id,
-      salesmanId: body.salesmanId,
+      salesmanId: body.salesmanId || null,
       title: stripHtml(body.title),
       specialty: body.specialty,
       specs: stripHtml(body.specs),
@@ -333,29 +417,73 @@ appRouter.post("/rfqs", requireRole("COMPANY"), async (req, res) => {
       unit: body.unit,
       destinationCity: body.destinationCity,
       neededBy: body.neededBy ? new Date(body.neededBy) : undefined,
+      customize: body.customize ?? false,
     },
   });
+  const salesmen = await prisma.salesmanProfile.findMany({ select: { userId: true } });
+  await Promise.all(
+    salesmen.map((s) =>
+      notify(s.userId, "NEED", `New need: ${rfq.title}`, `${co!.legalName} listed a product. Get mill estimates, then send your rate.`, "/app/rfqs"),
+    ),
+  );
   res.status(201).json(rfq);
 });
 
 appRouter.get("/rfqs", async (req, res) => {
   const { user } = req as AuthedRequest;
+  if (user.role === "FACTORY") {
+    res.json([]);
+    return;
+  }
+  const sm = user.role === "SALESMAN" ? await prisma.salesmanProfile.findUnique({ where: { userId: user.id } }) : null;
   const where =
     user.role === "SALESMAN"
-      ? { salesman: { userId: user.id } }
+      ? {
+          OR: [{ status: "OPEN" }, { salesmanId: sm!.id }, { quotes: { some: { salesmanId: sm!.id } } }],
+        }
       : user.role === "COMPANY"
         ? { company: { userId: user.id } }
         : {};
   const rows = await prisma.rfq.findMany({
     where,
-    include: { company: true, salesman: true, quotes: { include: { lines: true } } },
+    include: {
+      company: true,
+      salesman: true,
+      quotes: { include: { lines: true } },
+      estimates: { include: { factory: true } },
+      proposals: { include: { salesman: true } },
+    },
     orderBy: { createdAt: "desc" },
   });
   res.json(
-    rows.map((r) => ({
-      ...r,
-      quotes: r.quotes.map((q) => serializeQuote(q, user.role)),
-    })),
+    rows.map((r) => {
+      const estimates =
+        user.role === "SALESMAN"
+          ? r.estimates
+              .filter((e) => e.salesmanId === sm!.id)
+              .map((e) => ({
+                ...e,
+                factory: publicFactory(e.factory),
+              }))
+          : [];
+      return {
+        ...r,
+        salesman: r.salesman ? salesmanCard(r.salesman) : null,
+        company: user.role === "COMPANY" ? { legalName: r.company.legalName } : r.company,
+        quotes: r.quotes.map((q) => serializeQuote(q, user.role)),
+        estimates,
+        proposalCount: r.proposals.length,
+        proposals:
+          user.role === "COMPANY"
+            ? r.proposals.map((p) => ({
+                id: p.id,
+                status: p.status,
+                sellPrice: p.sellPrice,
+                salesman: salesmanCard(p.salesman),
+              }))
+            : undefined,
+      };
+    }),
   );
 });
 
@@ -364,7 +492,7 @@ const quoteSchema = z.object({
   paymentTerms: z.enum(["ADVANCE_50", "NET_15", "NET_30", "NET_45", "COD"]).default("NET_30"),
   deliveryDate: z.string().optional(),
   notes: z.string().max(2000).optional(),
-  factoryCostEstimate: money,
+  factoryCostEstimate: money.optional(),
   discount: money.optional(),
   lines: z.array(z.object({ product: text, quantity: money, unitPrice: money })).min(1),
 });
@@ -374,11 +502,12 @@ appRouter.post("/quotes", requireRole("SALESMAN"), async (req, res) => {
   const body = quoteSchema.parse(req.body);
   const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
   const rfq = await prisma.rfq.findUnique({ where: { id: body.rfqId } });
-  if (!rfq || rfq.salesmanId !== sm!.id) {
+  const openBoard = rfq && (rfq.salesmanId == null || rfq.salesmanId === sm!.id);
+  if (!rfq || !openBoard) {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
-  const last = await prisma.quote.findFirst({ where: { rfqId: rfq.id }, orderBy: { version: "desc" } });
+  const last = await prisma.quote.findFirst({ where: { rfqId: rfq.id, salesmanId: sm!.id }, orderBy: { version: "desc" } });
   const quote = await prisma.quote.create({
     data: {
       rfqId: rfq.id,
@@ -388,7 +517,7 @@ appRouter.post("/quotes", requireRole("SALESMAN"), async (req, res) => {
       paymentTerms: body.paymentTerms as PaymentTerms,
       deliveryDate: body.deliveryDate ? new Date(body.deliveryDate) : undefined,
       notes: body.notes ? stripHtml(body.notes) : undefined,
-      factoryCostEstimate: body.factoryCostEstimate,
+      factoryCostEstimate: body.factoryCostEstimate ?? 0,
       discount: body.discount ?? 0,
       lines: { create: body.lines },
     },
@@ -399,6 +528,10 @@ appRouter.post("/quotes", requireRole("SALESMAN"), async (req, res) => {
 
 appRouter.get("/quotes", async (req, res) => {
   const { user } = req as AuthedRequest;
+  if (user.role === "FACTORY") {
+    res.json([]);
+    return;
+  }
   const where =
     user.role === "SALESMAN"
       ? { salesman: { userId: user.id } }
@@ -407,7 +540,7 @@ appRouter.get("/quotes", async (req, res) => {
         : {};
   const rows = await prisma.quote.findMany({
     where,
-    include: { lines: true, rfq: { include: { company: true } } },
+    include: { lines: true, salesman: true, rfq: { include: { company: true } } },
     orderBy: { createdAt: "desc" },
   });
   res.json(rows.map((q) => serializeQuote(q, user.role)));
@@ -417,7 +550,7 @@ appRouter.get("/quotes/:id", async (req, res) => {
   const { user } = req as AuthedRequest;
   const q = await prisma.quote.findUnique({
     where: { id: req.params.id },
-    include: { lines: true, rfq: { include: { company: true, salesman: true } } },
+    include: { lines: true, salesman: true, rfq: { include: { company: true, salesman: true } } },
   });
   if (!q) {
     res.status(404).json({ error: "Not found" });
@@ -425,7 +558,7 @@ appRouter.get("/quotes/:id", async (req, res) => {
   }
   const allowed =
     user.role === "ADMIN" ||
-    (user.role === "SALESMAN" && q.rfq.salesman.userId === user.id) ||
+    (user.role === "SALESMAN" && q.salesman.userId === user.id) ||
     (user.role === "COMPANY" && q.rfq.company.userId === user.id);
   if (!allowed) {
     res.status(403).json({ error: "Forbidden" });
@@ -491,6 +624,8 @@ appRouter.post("/quotes/:id/decide", requireRole("COMPANY"), async (req, res) =>
         quoteId: q.id,
         salesmanId: q.salesmanId,
         companyId: q.rfq.companyId,
+        factoryId: q.salesman.factoryId,
+        factoryCost: q.factoryCostEstimate,
         promisedDate: q.deliveryDate,
         events: { create: { status: "CONFIRMED", note: "Quote accepted", actorId: user.id } },
       },
@@ -517,20 +652,25 @@ appRouter.post("/quotes/:id/decide", requireRole("COMPANY"), async (req, res) =>
 
 appRouter.get("/orders", async (req, res) => {
   const { user } = req as AuthedRequest;
+  const mill = user.role === "FACTORY" ? await prisma.factoryProfile.findUnique({ where: { userId: user.id } }) : null;
   const where =
     user.role === "SALESMAN"
       ? { salesman: { userId: user.id } }
       : user.role === "COMPANY"
         ? { company: { userId: user.id } }
-        : {};
+        : user.role === "FACTORY"
+          ? { factoryId: mill!.id }
+          : {};
   const rows = await prisma.order.findMany({
     where,
     include: {
       company: true,
       salesman: true,
+      factory: true,
       quote: { include: { lines: true, rfq: true } },
       events: { orderBy: { createdAt: "asc" } },
       invoice: true,
+      reviews: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -544,10 +684,11 @@ appRouter.get("/orders/:id", async (req, res) => {
     include: {
       company: true,
       salesman: true,
+      factory: true,
       quote: { include: { lines: true, rfq: true } },
       events: { orderBy: { createdAt: "asc" } },
       invoice: { include: { payments: true } },
-      review: true,
+      reviews: true,
       messages: true,
     },
   });
@@ -555,10 +696,12 @@ appRouter.get("/orders/:id", async (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
+  const mill = user.role === "FACTORY" ? await prisma.factoryProfile.findUnique({ where: { userId: user.id } }) : null;
   const allowed =
     user.role === "ADMIN" ||
     (user.role === "SALESMAN" && o.salesman.userId === user.id) ||
-    (user.role === "COMPANY" && o.company.userId === user.id);
+    (user.role === "COMPANY" && o.company.userId === user.id) ||
+    (user.role === "FACTORY" && mill && o.factoryId === mill.id);
   if (!allowed) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -568,7 +711,14 @@ appRouter.get("/orders/:id", async (req, res) => {
 
 appRouter.post("/orders/:id/status", requireRole("SALESMAN"), async (req, res) => {
   const { user } = req as AuthedRequest;
-  const body = z.object({ status: z.enum(["SENT_TO_FACTORY", "IN_PRODUCTION", "SHIPPED", "DELIVERED"]), note: z.string().max(500).optional() }).parse(req.body);
+  const body = z
+    .object({
+      status: z.enum(["SENT_TO_FACTORY", "IN_PRODUCTION", "SHIPPED", "DELIVERED"]),
+      note: z.string().max(500).optional(),
+      factoryId: z.string().optional(),
+      factoryCost: money.optional(),
+    })
+    .parse(req.body);
   const o = await prisma.order.findUnique({ where: { id: req.params.id }, include: { salesman: true } });
   if (!o || o.salesman.userId !== user.id) {
     res.status(403).json({ error: "Forbidden" });
@@ -583,11 +733,63 @@ appRouter.post("/orders/:id/status", requireRole("SALESMAN"), async (req, res) =
     where: { id: o.id },
     data: {
       status: next,
+      factoryId: body.factoryId ?? o.factoryId,
+      factoryCost: body.factoryCost ?? o.factoryCost,
       deliveredAt: next === "DELIVERED" ? new Date() : o.deliveredAt,
       events: { create: { status: next, note: body.note, actorId: user.id } },
     },
-    include: { quote: { include: { lines: true } }, events: true },
+    include: { quote: { include: { lines: true } }, events: true, salesman: true, factory: true },
   });
+  if (next === "SENT_TO_FACTORY" && updated.factoryId) {
+    const mill = await prisma.factoryProfile.findUnique({ where: { id: updated.factoryId } });
+    if (mill) {
+      await notify(
+        mill.userId,
+        "JOB",
+        "New mill job from a salesman",
+        `${o.salesman.displayName} placed a job at ${updated.factoryCost} SAR.`,
+        "/app/orders",
+      );
+    }
+  }
+  res.json(serializeOrder(updated, user.role));
+});
+
+appRouter.post("/orders/:id/pay-factory", requireRole("SALESMAN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const o = await prisma.order.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: true, factory: true, quote: { include: { lines: true } } },
+  });
+  if (!o || o.salesman.userId !== user.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  if (!o.factoryId || o.factoryCost <= 0) {
+    res.status(400).json({ error: "Pick a mill and factory cost first" });
+    return;
+  }
+  if (o.factoryPaidAt) {
+    res.status(409).json({ error: "Factory already paid" });
+    return;
+  }
+  const updated = await prisma.order.update({
+    where: { id: o.id },
+    data: {
+      factoryPaidAt: new Date(),
+      events: { create: { status: o.status, note: `Paid mill ${o.factoryCost} SAR`, actorId: user.id } },
+    },
+    include: { quote: { include: { lines: true } }, salesman: true, factory: true, events: true },
+  });
+  if (o.factory) {
+    await notify(
+      o.factory.userId,
+      "MILL_PAID",
+      "Salesman paid this job",
+      `${o.salesman.displayName} paid ${o.factoryCost} SAR for a mill job.`,
+      "/app/orders",
+    );
+  }
   res.json(serializeOrder(updated, user.role));
 });
 
@@ -617,6 +819,10 @@ appRouter.post("/orders/:id/receive", requireRole("COMPANY"), async (req, res) =
 
 appRouter.get("/invoices", async (req, res) => {
   const { user } = req as AuthedRequest;
+  if (user.role === "FACTORY") {
+    res.json([]);
+    return;
+  }
   const where =
     user.role === "SALESMAN"
       ? { order: { salesman: { userId: user.id } } }
@@ -631,7 +837,7 @@ appRouter.get("/invoices", async (req, res) => {
   res.json(rows.map((i) => ({ ...i, order: serializeOrder(i.order, user.role) })));
 });
 
-appRouter.post("/invoices/:id/pay", requireRole("SALESMAN"), async (req, res) => {
+appRouter.post("/invoices/:id/pay", requireRole("SALESMAN", "COMPANY"), async (req, res) => {
   const { user } = req as AuthedRequest;
   const body = z
     .object({
@@ -642,9 +848,13 @@ appRouter.post("/invoices/:id/pay", requireRole("SALESMAN"), async (req, res) =>
     .parse(req.body);
   const inv = await prisma.invoice.findUnique({
     where: { id: req.params.id },
-    include: { payments: true, order: { include: { salesman: true } } },
+    include: { payments: true, order: { include: { salesman: true, company: true } } },
   });
-  if (!inv || inv.order.salesman.userId !== user.id) {
+  const ok =
+    inv &&
+    ((user.role === "SALESMAN" && inv.order.salesman.userId === user.id) ||
+      (user.role === "COMPANY" && inv.order.company.userId === user.id));
+  if (!inv || !ok) {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
@@ -661,7 +871,7 @@ appRouter.post("/invoices/:id/pay", requireRole("SALESMAN"), async (req, res) =>
   res.json(updated);
 });
 
-appRouter.post("/reviews", requireRole("COMPANY"), async (req, res) => {
+appRouter.post("/reviews", requireRole("COMPANY", "FACTORY"), async (req, res) => {
   const { user } = req as AuthedRequest;
   const body = z
     .object({
@@ -675,17 +885,27 @@ appRouter.post("/reviews", requireRole("COMPANY"), async (req, res) => {
     .parse(req.body);
   const o = await prisma.order.findUnique({
     where: { id: body.orderId },
-    include: { company: true, review: true },
+    include: { company: true, factory: true, reviews: true },
   });
-  if (!o || o.company.userId !== user.id) {
+  if (!o) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const asCompany = user.role === "COMPANY" && o.company.userId === user.id;
+  const asFactory = user.role === "FACTORY" && o.factory?.userId === user.id;
+  if (!asCompany && !asFactory) {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
-  if (o.status !== "RECEIVED") {
+  if (asCompany && o.status !== "RECEIVED") {
     res.status(400).json({ error: "Review after receipt only" });
     return;
   }
-  if (o.review) {
+  if (asFactory && !o.factoryPaidAt) {
+    res.status(400).json({ error: "Review after mill payment only" });
+    return;
+  }
+  if (o.reviews.some((r) => r.authorId === user.id)) {
     res.status(409).json({ error: "Already reviewed" });
     return;
   }
@@ -694,6 +914,7 @@ appRouter.post("/reviews", requireRole("COMPANY"), async (req, res) => {
       orderId: o.id,
       salesmanId: o.salesmanId,
       authorId: user.id,
+      authorRole: user.role,
       quality: body.quality,
       deliverySpeed: body.deliverySpeed,
       professionalism: body.professionalism,
@@ -712,13 +933,30 @@ appRouter.get("/reviews", async (req, res) => {
       ? { salesman: { userId: user.id }, archived: false }
       : user.role === "COMPANY"
         ? { authorId: user.id }
-        : {};
+        : user.role === "FACTORY"
+          ? { authorId: user.id }
+          : {};
   const rows = await prisma.review.findMany({
     where,
-    include: { order: { include: { company: true } } },
+    include: { order: { include: { company: true, factory: true } } },
     orderBy: { createdAt: "desc" },
   });
-  res.json(rows);
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      from: r.authorRole,
+      order:
+        user.role === "FACTORY"
+          ? { id: r.order.id, millJob: true }
+          : user.role === "COMPANY"
+            ? { id: r.order.id }
+            : {
+                id: r.order.id,
+                company: r.authorRole === "COMPANY" ? { legalName: r.order.company.legalName } : undefined,
+                factory: r.authorRole === "FACTORY" && r.order.factory ? { legalName: r.order.factory.legalName } : undefined,
+              },
+    })),
+  );
 });
 
 appRouter.post("/messages", async (req, res) => {
@@ -758,6 +996,675 @@ appRouter.post("/admin/credentials/:id", requireRole("ADMIN"), async (req, res) 
   const sm = await prisma.salesmanProfile.findUnique({ where: { userId: cred.userId } });
   if (sm) await recalcTrustScore(sm.id);
   res.json(cred);
+});
+
+appRouter.get("/factories", requireRole("SALESMAN", "ADMIN"), async (_req, res) => {
+  const rows = await prisma.factoryProfile.findMany();
+  res.json(rows.map(publicFactory));
+});
+
+appRouter.get("/notifications", async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const rows = await prisma.notification.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
+    take: 40,
+  });
+  res.json(rows);
+});
+
+appRouter.post("/notifications/:id/read", async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const row = await prisma.notification.updateMany({
+    where: { id: req.params.id, userId: user.id },
+    data: { read: true },
+  });
+  res.json({ ok: row.count > 0 });
+});
+
+function mapEstimate(
+  e: {
+    id: string;
+    status: string;
+    amount: number | null;
+    readyBy: Date | null;
+    notes: string | null;
+    createdAt: Date;
+    rfq: { id: string; title: string; specs: string; quantity: number; unit: string; destinationCity: string; customize: boolean };
+    factory: Parameters<typeof publicFactory>[0];
+    salesman: Parameters<typeof salesmanCard>[0];
+  },
+  role: string,
+) {
+  return {
+    id: e.id,
+    status: e.status,
+    amount: e.amount,
+    readyBy: e.readyBy,
+    notes: e.notes,
+    createdAt: e.createdAt,
+    rfq: e.rfq,
+    factory: role === "COMPANY" ? undefined : publicFactory(e.factory),
+    salesman: salesmanCard(e.salesman),
+  };
+}
+
+appRouter.get("/estimates", requireRole("SALESMAN", "FACTORY", "ADMIN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const include = { rfq: true, factory: true, salesman: true } as const;
+  if (user.role === "SALESMAN") {
+    const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.factoryEstimate.findMany({
+      where: { salesmanId: sm!.id },
+      include,
+      orderBy: [{ amount: "asc" }, { readyBy: "asc" }, { createdAt: "desc" }],
+    });
+    res.json(rows.map((e) => mapEstimate(e, user.role)));
+    return;
+  }
+  if (user.role === "FACTORY") {
+    const mill = await prisma.factoryProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.factoryEstimate.findMany({
+      where: { factoryId: mill!.id },
+      include,
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(rows.map((e) => mapEstimate(e, user.role)));
+    return;
+  }
+  const rows = await prisma.factoryEstimate.findMany({ include, orderBy: { createdAt: "desc" } });
+  res.json(rows.map((e) => mapEstimate(e, user.role)));
+});
+
+appRouter.post("/estimates", requireRole("SALESMAN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const body = z.object({ rfqId: z.string(), factoryId: z.string().optional(), factoryIds: z.array(z.string()).optional() }).parse(req.body);
+  const ids = body.factoryIds?.length ? body.factoryIds : body.factoryId ? [body.factoryId] : [];
+  if (!ids.length) {
+    res.status(400).json({ error: "Pick at least one factory" });
+    return;
+  }
+  const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+  const rfq = await prisma.rfq.findUnique({ where: { id: body.rfqId } });
+  if (!sm || !rfq) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const created = [];
+  for (const factoryId of ids) {
+    const mill = await prisma.factoryProfile.findUnique({ where: { id: factoryId } });
+    if (!mill) continue;
+    const existing = await prisma.factoryEstimate.findFirst({
+      where: { rfqId: rfq.id, factoryId: mill.id, salesmanId: sm.id, status: { in: ["REQUESTED", "QUOTED"] } },
+    });
+    if (existing) {
+      created.push(existing);
+      continue;
+    }
+    const row = await prisma.factoryEstimate.create({
+      data: { rfqId: rfq.id, factoryId: mill.id, salesmanId: sm.id },
+      include: { rfq: true, factory: true, salesman: true },
+    });
+    await notify(
+      mill.userId,
+      "ESTIMATE",
+      "Estimate request",
+      `${sm.displayName} needs a mill price and ready date for ${rfq.title}.`,
+      "/app/estimates",
+    );
+    created.push(mapEstimate(row, user.role));
+  }
+  res.status(201).json({ count: created.length, estimates: created });
+});
+
+appRouter.patch("/estimates/:id", requireRole("FACTORY"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const body = z
+    .object({
+      amount: money,
+      readyBy: z.string().optional(),
+      notes: z.string().max(1000).optional(),
+      decline: z.boolean().optional(),
+    })
+    .parse(req.body);
+  const mill = await prisma.factoryProfile.findUnique({ where: { userId: user.id } });
+  const row = await prisma.factoryEstimate.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: true, rfq: true },
+  });
+  if (!mill || !row || row.factoryId !== mill.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const updated = await prisma.factoryEstimate.update({
+    where: { id: row.id },
+    data: body.decline
+      ? { status: "DECLINED", notes: body.notes ? stripHtml(body.notes) : row.notes }
+      : {
+          status: "QUOTED",
+          amount: body.amount,
+          readyBy: body.readyBy ? new Date(body.readyBy) : undefined,
+          notes: body.notes ? stripHtml(body.notes) : undefined,
+        },
+    include: { rfq: true, factory: true, salesman: true },
+  });
+  await notify(
+    row.salesman.userId,
+    "ESTIMATE",
+    body.decline ? "Mill declined estimate" : "Mill estimate in",
+    body.decline
+      ? `${mill.legalName} declined ${row.rfq.title}.`
+      : `${mill.legalName} quoted ${body.amount} SAR for ${row.rfq.title}.`,
+    "/app/rfqs",
+  );
+  res.json(mapEstimate(updated, user.role));
+});
+
+appRouter.post("/estimates/:id/accept", requireRole("SALESMAN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+  const row = await prisma.factoryEstimate.findUnique({
+    where: { id: req.params.id },
+    include: { rfq: true, factory: true, salesman: true },
+  });
+  if (!sm || !row || row.salesmanId !== sm.id || row.status !== "QUOTED") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  await prisma.factoryEstimate.updateMany({
+    where: { rfqId: row.rfqId, salesmanId: sm.id, id: { not: row.id }, status: { in: ["REQUESTED", "QUOTED"] } },
+    data: { status: "DECLINED" },
+  });
+  const updated = await prisma.factoryEstimate.update({
+    where: { id: row.id },
+    data: { status: "ACCEPTED" },
+    include: { rfq: true, factory: true, salesman: true },
+  });
+  await notify(
+    row.factory.userId,
+    "ESTIMATE",
+    "Your mill was picked",
+    `${sm.displayName} picked your estimate for ${row.rfq.title}.`,
+    "/app/estimates",
+  );
+  res.json(mapEstimate(updated, user.role));
+});
+
+function mapProposal(
+  p: {
+    id: string;
+    subject: string;
+    body: string;
+    status: string;
+    sentAt: Date;
+    openedAt: Date | null;
+    selectedAt: Date | null;
+    followUpNotifiedAt: Date | null;
+    sellPrice: number | null;
+    factoryCost: number | null;
+    readyBy: Date | null;
+    rfqId: string | null;
+    rfq?: { id: string; title: string } | null;
+    salesman: {
+      id: string;
+      displayName: string;
+      slug: string;
+      photoUrl: string | null;
+      bio: string | null;
+      title: string | null;
+      yearsExperience: number;
+      cities: string;
+      specialties: string;
+      trustScore: number;
+      waNumber: string | null;
+      factory: Parameters<typeof publicFactory>[0];
+    };
+    company: { id: string; legalName: string; city: string | null; contactName: string | null };
+  },
+  role: string,
+) {
+  const sell = p.sellPrice;
+  return {
+    id: p.id,
+    subject: p.subject,
+    body: p.body,
+    status: p.status,
+    sentAt: p.sentAt,
+    openedAt: p.openedAt,
+    selectedAt: p.selectedAt,
+    followUpDue: Boolean(p.followUpNotifiedAt),
+    sellPrice: sell,
+    readyBy: p.readyBy,
+    rfqId: p.rfqId,
+    rfqTitle: p.rfq?.title,
+    factoryCost: role === "COMPANY" ? undefined : p.factoryCost,
+    profit: role === "COMPANY" || sell == null || p.factoryCost == null ? undefined : salesmanProfit(sell, p.factoryCost),
+    salesman: salesmanCard(p.salesman),
+    company: role === "SALESMAN" || role === "ADMIN" ? p.company : undefined,
+    companyName: role === "SALESMAN" || role === "ADMIN" ? p.company.legalName : undefined,
+    profileUrl: `${appOrigin()}/p/${p.salesman.slug}`,
+  };
+}
+
+appRouter.get("/proposals", async (req, res) => {
+  const { user } = req as AuthedRequest;
+  if (user.role === "FACTORY") {
+    res.json([]);
+    return;
+  }
+  const include = { salesman: { include: { factory: true } }, company: true, rfq: true } as const;
+  if (user.role === "SALESMAN") {
+    const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.proposal.findMany({
+      where: { salesmanId: sm!.id },
+      include,
+      orderBy: { sentAt: "desc" },
+    });
+    res.json(rows.map((p) => mapProposal(p, user.role)));
+    return;
+  }
+  if (user.role === "COMPANY") {
+    const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.proposal.findMany({
+      where: { companyId: co!.id },
+      include,
+      orderBy: [{ sentAt: "desc" }],
+    });
+    const mapped = rows.map((p) => mapProposal(p, user.role));
+    mapped.sort((a, b) => {
+      const trust = (b.salesman.trustScore ?? 0) - (a.salesman.trustScore ?? 0);
+      if (trust) return trust;
+      return (a.sellPrice ?? 1e15) - (b.sellPrice ?? 1e15);
+    });
+    res.json(mapped);
+    return;
+  }
+  const rows = await prisma.proposal.findMany({ include, orderBy: { sentAt: "desc" } });
+  res.json(rows.map((p) => mapProposal(p, user.role)));
+});
+
+appRouter.post("/proposals", requireRole("SALESMAN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const body = z
+    .object({
+      companyId: z.string().optional(),
+      companyIds: z.array(z.string()).optional(),
+      rfqId: z.string().optional(),
+      factoryEstimateId: z.string().optional(),
+      sellPrice: money.optional(),
+      factoryCost: money.optional(),
+      readyBy: z.string().optional(),
+      subject: z.string().min(3).max(160),
+      body: z.string().min(8).max(8000),
+    })
+    .parse(req.body);
+  const sm = await prisma.salesmanProfile.findUnique({
+    where: { userId: user.id },
+    include: { factory: true },
+  });
+  if (!sm) {
+    res.status(404).json({ error: "No profile" });
+    return;
+  }
+  let rfq = body.rfqId ? await prisma.rfq.findUnique({ where: { id: body.rfqId } }) : null;
+  let estimate = body.factoryEstimateId
+    ? await prisma.factoryEstimate.findUnique({ where: { id: body.factoryEstimateId } })
+    : rfq
+      ? await prisma.factoryEstimate.findFirst({ where: { rfqId: rfq.id, salesmanId: sm.id, status: "ACCEPTED" } })
+      : null;
+  const ids = body.companyIds?.length ? body.companyIds : body.companyId ? [body.companyId] : rfq ? [rfq.companyId] : [];
+  if (!ids.length) {
+    res.status(400).json({ error: "Pick at least one company" });
+    return;
+  }
+  const created = [];
+  for (const companyId of ids) {
+    const co = await prisma.companyProfile.findUnique({
+      where: { id: companyId },
+      include: { user: true },
+    });
+    if (!co) continue;
+    const trackingToken = crypto.randomBytes(24).toString("hex");
+    const profileUrl = `${appOrigin()}/p/${sm.slug}`;
+    const trackUrl = `${appOrigin()}/track/open/${trackingToken}`;
+    const rateLine = body.sellPrice != null ? `\n\nMy rate to ready and deliver: ${body.sellPrice} SAR.` : "";
+    const mail = proposalEmail({
+      companyName: co.legalName,
+      salesmanName: sm.displayName,
+      subject: stripHtml(body.subject),
+      body: stripHtml(body.body) + rateLine,
+      profileUrl,
+      trackUrl,
+    });
+    const proposal = await prisma.proposal.create({
+      data: {
+        salesmanId: sm.id,
+        companyId: co.id,
+        rfqId: rfq?.id,
+        factoryId: estimate?.factoryId,
+        factoryEstimateId: estimate?.id,
+        subject: stripHtml(body.subject),
+        body: stripHtml(body.body),
+        sellPrice: body.sellPrice,
+        factoryCost: body.factoryCost ?? estimate?.amount ?? undefined,
+        readyBy: body.readyBy ? new Date(body.readyBy) : estimate?.readyBy ?? undefined,
+        trackingToken,
+      },
+      include: { salesman: { include: { factory: true } }, company: true, rfq: true },
+    });
+    await notify(
+      co.userId,
+      "PROPOSAL",
+      `Proposal from ${sm.displayName}`,
+      body.sellPrice != null
+        ? `${stripHtml(body.subject)} · ${body.sellPrice} SAR — compare trust score and rate.`
+        : `${stripHtml(body.subject)} — open inbox to compare salesmen.`,
+      "/app/inbox",
+    );
+    await sendMail({
+      to: co.user.email,
+      subject: stripHtml(body.subject),
+      text: `${mail.text}\nTijarah inbox: ${appOrigin()}/app/inbox`,
+      html: mail.html,
+    });
+    created.push(mapProposal(proposal, user.role));
+  }
+  res.status(201).json({ count: created.length, proposals: created });
+});
+
+appRouter.post("/proposals/:id/open", requireRole("COMPANY"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+  const p = await prisma.proposal.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: true, company: true },
+  });
+  if (!p || !co || p.companyId !== co.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  if (!p.openedAt) {
+    await prisma.proposal.update({
+      where: { id: p.id },
+      data: { openedAt: new Date(), status: p.status === "SENT" ? "OPENED" : p.status },
+    });
+    await notify(
+      p.salesman.userId,
+      "EMAIL_OPEN",
+      "Proposal opened",
+      `${p.company.legalName} opened your proposal in Tijarah.`,
+      "/app/outreach",
+    );
+  }
+  res.json({ ok: true });
+});
+
+appRouter.post("/proposals/:id/select", requireRole("COMPANY"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+  const p = await prisma.proposal.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: { include: { factory: true } }, company: true, rfq: true },
+  });
+  if (!p || !co || p.companyId !== co.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const updated = await prisma.proposal.update({
+    where: { id: p.id },
+    data: { status: "SELECTED", selectedAt: new Date() },
+    include: { salesman: { include: { factory: true } }, company: true, rfq: true },
+  });
+  if (p.rfqId) {
+    await prisma.proposal.updateMany({
+      where: { rfqId: p.rfqId, id: { not: p.id }, status: { in: ["SENT", "OPENED"] } },
+      data: { status: "DECLINED" },
+    });
+  }
+  let orderId: string | undefined;
+  if (p.sellPrice && p.sellPrice > 0) {
+    const rfq =
+      p.rfq ??
+      (await prisma.rfq.create({
+        data: {
+          companyId: co.id,
+          salesmanId: p.salesmanId,
+          title: p.subject.slice(0, 80),
+          specialty: "steel",
+          specs: p.body.slice(0, 400),
+          quantity: 1,
+          unit: "lot",
+          destinationCity: co.city || "Riyadh",
+        },
+      }));
+    const last = await prisma.quote.findFirst({ where: { rfqId: rfq.id, salesmanId: p.salesmanId }, orderBy: { version: "desc" } });
+    const factoryCost = p.factoryCost ?? 0;
+    const result = await prisma.$transaction(async (tx) => {
+      const quote = await tx.quote.create({
+        data: {
+          rfqId: rfq.id,
+          salesmanId: p.salesmanId,
+          version: (last?.version ?? 0) + 1,
+          status: "ACCEPTED",
+          factoryCostEstimate: factoryCost,
+          deliveryDate: p.readyBy ?? undefined,
+          lines: { create: [{ product: rfq.title, quantity: rfq.quantity || 1, unitPrice: p.sellPrice! / Math.max(1, rfq.quantity || 1) }] },
+        },
+        include: { lines: true },
+      });
+      const totals = quoteTotals(quote.lines, quote.discount);
+      const order = await tx.order.create({
+        data: {
+          quoteId: quote.id,
+          salesmanId: p.salesmanId,
+          companyId: co.id,
+          factoryId: p.factoryId,
+          factoryCost,
+          promisedDate: p.readyBy,
+          events: { create: { status: "CONFIRMED", note: "Company selected this salesman", actorId: user.id } },
+        },
+      });
+      const count = await tx.invoice.count();
+      const due = new Date();
+      due.setDate(due.getDate() + 30);
+      await tx.invoice.create({
+        data: {
+          orderId: order.id,
+          number: `INV-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`,
+          subtotal: totals.subtotal,
+          vat: totals.vat,
+          total: totals.total,
+          dueDate: due,
+        },
+      });
+      await tx.rfq.update({ where: { id: rfq.id }, data: { status: "AWARDED", salesmanId: p.salesmanId } });
+      return order.id;
+    });
+    orderId = result;
+  }
+  await notify(
+    p.salesman.userId,
+    "SELECTED",
+    "You were selected",
+    orderId
+      ? `${co.legalName} selected your rate. Place the job with the cheapest/fastest mill, pay them when ready, then deliver.`
+      : `${co.legalName} selected you.`,
+    orderId ? "/app/orders" : "/app/rfqs",
+  );
+  res.json({ ...mapProposal(updated, user.role), orderId });
+});
+
+appRouter.get("/export/orders.csv", async (req, res) => {
+  const { user } = req as AuthedRequest;
+  if (user.role !== "SALESMAN") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const rows = await prisma.order.findMany({
+    where: { salesman: { userId: user.id } },
+    include: { company: true, quote: { include: { lines: true } } },
+  });
+  const lines = ["id,company,status,createdAt,total"];
+  for (const o of rows) {
+    const t = quoteTotals(o.quote.lines, o.quote.discount);
+    lines.push(`${o.id},${o.company.legalName},${o.status},${o.createdAt.toISOString()},${t.total}`);
+  }
+  res.setHeader("Content-Type", "text/csv");
+  res.send(lines.join("\n"));
+});
+
+
+appRouter.get("/proposals", async (req, res) => {
+  const { user } = req as AuthedRequest;
+  if (user.role === "FACTORY") {
+    res.json([]);
+    return;
+  }
+  const include = { salesman: { include: { factory: true } }, company: true } as const;
+  if (user.role === "SALESMAN") {
+    const sm = await prisma.salesmanProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.proposal.findMany({
+      where: { salesmanId: sm!.id },
+      include,
+      orderBy: { sentAt: "desc" },
+    });
+    res.json(rows.map((p) => mapProposal(p, user.role)));
+    return;
+  }
+  if (user.role === "COMPANY") {
+    const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+    const rows = await prisma.proposal.findMany({
+      where: { companyId: co!.id },
+      include,
+      orderBy: { sentAt: "desc" },
+    });
+    res.json(rows.map((p) => mapProposal(p, user.role)));
+    return;
+  }
+  const rows = await prisma.proposal.findMany({ include, orderBy: { sentAt: "desc" } });
+  res.json(rows.map((p) => mapProposal(p, user.role)));
+});
+
+appRouter.post("/proposals", requireRole("SALESMAN"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const body = z
+    .object({
+      companyId: z.string().optional(),
+      companyIds: z.array(z.string()).optional(),
+      subject: z.string().min(3).max(160),
+      body: z.string().min(8).max(8000),
+    })
+    .parse(req.body);
+  const ids = body.companyIds?.length ? body.companyIds : body.companyId ? [body.companyId] : [];
+  if (!ids.length) {
+    res.status(400).json({ error: "Pick at least one company" });
+    return;
+  }
+  const sm = await prisma.salesmanProfile.findUnique({
+    where: { userId: user.id },
+    include: { factory: true },
+  });
+  if (!sm) {
+    res.status(404).json({ error: "No profile" });
+    return;
+  }
+  const created = [];
+  for (const companyId of ids) {
+    const co = await prisma.companyProfile.findUnique({
+      where: { id: companyId },
+      include: { user: true },
+    });
+    if (!co) continue;
+    const trackingToken = crypto.randomBytes(24).toString("hex");
+    const profileUrl = `${appOrigin()}/p/${sm.slug}`;
+    const trackUrl = `${appOrigin()}/track/open/${trackingToken}`;
+    const mail = proposalEmail({
+      companyName: co.legalName,
+      salesmanName: sm.displayName,
+      subject: stripHtml(body.subject),
+      body: stripHtml(body.body),
+      profileUrl,
+      trackUrl,
+    });
+    const proposal = await prisma.proposal.create({
+      data: {
+        salesmanId: sm.id,
+        companyId: co.id,
+        subject: stripHtml(body.subject),
+        body: stripHtml(body.body),
+        trackingToken,
+      },
+      include: { salesman: { include: { factory: true } }, company: true },
+    });
+    await notify(
+      co.userId,
+      "PROPOSAL",
+      `Proposal from ${sm.displayName}`,
+      `${stripHtml(body.subject)} — open inbox to compare salesmen.`,
+      "/app/inbox",
+    );
+    await sendMail({
+      to: co.user.email,
+      subject: stripHtml(body.subject),
+      text: `${mail.text}\nTijarah inbox: ${appOrigin()}/app/inbox`,
+      html: mail.html,
+    });
+    created.push(mapProposal(proposal, user.role));
+  }
+  res.status(201).json({ count: created.length, proposals: created });
+});
+
+appRouter.post("/proposals/:id/open", requireRole("COMPANY"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+  const p = await prisma.proposal.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: true, company: true },
+  });
+  if (!p || !co || p.companyId !== co.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  if (!p.openedAt) {
+    await prisma.proposal.update({
+      where: { id: p.id },
+      data: { openedAt: new Date(), status: p.status === "SENT" ? "OPENED" : p.status },
+    });
+    await notify(
+      p.salesman.userId,
+      "EMAIL_OPEN",
+      "Proposal opened",
+      `${p.company.legalName} opened your proposal in Tijarah.`,
+      "/app/outreach",
+    );
+  }
+  res.json({ ok: true });
+});
+
+appRouter.post("/proposals/:id/select", requireRole("COMPANY"), async (req, res) => {
+  const { user } = req as AuthedRequest;
+  const co = await prisma.companyProfile.findUnique({ where: { userId: user.id } });
+  const p = await prisma.proposal.findUnique({
+    where: { id: req.params.id },
+    include: { salesman: { include: { factory: true } }, company: true },
+  });
+  if (!p || !co || p.companyId !== co.id) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const updated = await prisma.proposal.update({
+    where: { id: p.id },
+    data: { status: "SELECTED", selectedAt: new Date() },
+    include: { salesman: { include: { factory: true } }, company: true },
+  });
+  await notify(
+    p.salesman.userId,
+    "SELECTED",
+    "You were selected",
+    `${co.legalName} selected you. They can now send an RFQ.`,
+    "/app/rfqs",
+  );
+  res.json(mapProposal(updated, user.role));
 });
 
 appRouter.get("/export/orders.csv", async (req, res) => {

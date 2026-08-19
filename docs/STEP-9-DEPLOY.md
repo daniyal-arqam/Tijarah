@@ -48,7 +48,7 @@ Yeh `DATABASE_URL` hai. **Pooled** string bhi chal sakti hai Prisma ke sath; aga
 | Field | Value |
 |---|---|
 | Runtime | Node |
-| Build | `npm install && npx prisma generate --schema=apps/api/prisma/schema.prisma` |
+| Build | `npm install && npx prisma generate --schema=apps/api/prisma/schema.prisma && npx prisma db push --schema=apps/api/prisma/schema.prisma --accept-data-loss && npm run db:seed -w @tijarah/api` |
 | Start | `npm run start -w @tijarah/api` |
 | Instance | Free |
 

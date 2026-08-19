@@ -6,7 +6,21 @@ import { PageHead } from "@/components/PageHead";
 import { useI18n } from "@/components/Providers";
 import { Avatar, Field, Stars } from "@/components/ui";
 
-const SPECS = ["Steel", "Trading", "Manufacturing", "Logistics", "Fabrication", "Alloys"];
+const SPECS = [
+  "Steel",
+  "sheet_metal",
+  "rebar",
+  "tanks",
+  "steel_structure",
+  "plate",
+  "coil",
+  "pipe",
+  "Trading",
+  "Manufacturing",
+  "Fabrication",
+  "Alloys",
+];
+const CITIES = ["Riyadh", "Jeddah", "Dammam", "Khobar", "Jubail", "Yanbu", "Makkah", "Madinah", "Abha", "Tabuk"];
 
 function parseSpecs(raw?: string | string[] | null) {
   if (!raw) return [];
@@ -17,6 +31,10 @@ function parseSpecs(raw?: string | string[] | null) {
   } catch {
     return [];
   }
+}
+
+function pretty(s: string) {
+  return s.replaceAll("_", " ");
 }
 
 async function fileToJpeg(file: File) {
@@ -47,25 +65,59 @@ export default function ProfilePage() {
   const [bio, setBio] = useState("");
   const [legalName, setLegalName] = useState("");
   const [photo, setPhoto] = useState("");
-  const [specs, setSpecs] = useState<string[]>(["Steel", "Trading"]);
-  const [trust, setTrust] = useState(10);
+  const [specs, setSpecs] = useState<string[]>([]);
+  const [cities, setCities] = useState<string[]>([]);
+  const [years, setYears] = useState(0);
+  const [wa, setWa] = useState("");
+  const [trust, setTrust] = useState(4);
+  const [title, setTitle] = useState("");
+  const [certs, setCerts] = useState("");
+  const [coverageNotes, setCoverageNotes] = useState("");
+  const [factoryId, setFactoryId] = useState("");
+  const [factories, setFactories] = useState<{ id: string; legalName: string; verified?: boolean }[]>([]);
+  const [millName, setMillName] = useState("");
   const [msg, setMsg] = useState("");
   const [notes, setNotes] = useState<{ title: string; meta: string }[]>([]);
 
   useEffect(() => {
     api("/api/me").then((u) => {
       setMe(u);
-      const sm = u.salesman as { displayName?: string; bio?: string; photoUrl?: string; firmName?: string; specialties?: string; trustScore?: number } | undefined;
+      const sm = u.salesman as {
+        displayName?: string;
+        bio?: string;
+        photoUrl?: string;
+        specialties?: string;
+        cities?: string;
+        yearsExperience?: number;
+        waNumber?: string | null;
+        trustScore?: number;
+        slug?: string;
+        title?: string;
+        certifications?: string | null;
+        coverageNotes?: string | null;
+        factoryId?: string | null;
+        factory?: { legalName: string } | null;
+      } | undefined;
       const co = u.company as { legalName?: string; logoUrl?: string; contactName?: string } | undefined;
-      setDisplayName(sm?.displayName || co?.contactName || "");
+      const mill = u.factory as { legalName?: string; logoUrl?: string } | undefined;
+      setDisplayName(sm?.displayName || co?.contactName || mill?.legalName || "");
       setBio(sm?.bio ?? "");
-      setLegalName(co?.legalName ?? "");
-      setPhoto(sm?.photoUrl || co?.logoUrl || "");
-      setSpecs(parseSpecs(sm?.specialties).length ? parseSpecs(sm?.specialties) : ["Steel", "Trading"]);
-      setTrust(sm?.trustScore ?? 10);
+      setLegalName(co?.legalName || mill?.legalName || "");
+      setPhoto(sm?.photoUrl || co?.logoUrl || mill?.logoUrl || "");
+      setSpecs(parseSpecs(sm?.specialties));
+      setCities(parseSpecs(sm?.cities));
+      setYears(sm?.yearsExperience ?? 0);
+      setWa(sm?.waNumber ?? "");
+      setTrust(sm?.trustScore ?? 4);
+      setTitle(sm?.title ?? "");
+      setCerts(sm?.certifications ?? "");
+      setCoverageNotes(sm?.coverageNotes ?? "");
+      setFactoryId(sm?.factoryId ?? "");
+      setMillName(sm?.factory?.legalName ?? mill?.legalName ?? "");
       const savedFirm = localStorage.getItem("tijarah-firm");
       if (savedFirm && !co?.legalName) setLegalName(savedFirm);
     });
+    api("/api/factories").then(setFactories).catch(() => setFactories([]));
     Promise.all([api("/api/quotes").catch(() => []), api("/api/orders").catch(() => [])]).then(([quotes, orders]) => {
       setNotes([
         ...quotes.slice(0, 4).map((x: { status: string; id: string }) => ({ title: `${t.quotes} ${x.id.slice(0, 8)}`, meta: x.status })),
@@ -76,6 +128,7 @@ export default function ProfilePage() {
 
   if (!me) return <p className="text-muted-foreground">{t.loading}</p>;
   const role = me.role as string;
+  const slug = (me.salesman as { slug?: string } | undefined)?.slug;
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -83,7 +136,7 @@ export default function ProfilePage() {
       method: "PATCH",
       body: JSON.stringify(
         role === "SALESMAN"
-          ? { displayName, bio, photoUrl: photo, specialties: specs }
+          ? { displayName, bio, photoUrl: photo, specialties: specs, cities, yearsExperience: years, waNumber: wa, title, certifications: certs, coverageNotes, factoryId: factoryId || undefined }
           : { legalName, displayName, logoUrl: photo },
       ),
     });
@@ -107,7 +160,7 @@ export default function ProfilePage() {
       </div>
 
       {tab === "profile" && (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_300px]">
           <form className="surface-slab space-y-4 rounded-2xl p-6" onSubmit={save}>
             <Field label={t.uploadPhoto}>
               <div className="mt-2 flex items-center gap-4">
@@ -126,16 +179,70 @@ export default function ProfilePage() {
             <Field label={t.fullName}>
               <input className="field" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
             </Field>
-            <Field label={t.companyName}>
-              <input className="field" value={role === "COMPANY" ? legalName : legalName} onChange={(e) => setLegalName(e.target.value)} />
-            </Field>
+            {role !== "SALESMAN" && (
+              <Field label={t.companyName}>
+                <input className="field" value={legalName} onChange={(e) => setLegalName(e.target.value)} />
+              </Field>
+            )}
             <Field label={t.email}>
               <input className="field opacity-70" value={me.email as string} readOnly />
             </Field>
             {role === "SALESMAN" && (
               <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label={t.yearsExp}>
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={years}
+                      onChange={(e) => setYears(Number(e.target.value))}
+                    />
+                  </Field>
+                  <Field label={t.jobTitle}>
+                    <input className="field" value={title} onChange={(e) => setTitle(e.target.value)} />
+                  </Field>
+                  <Field label={t.whatsapp} hint={t.waHint}>
+                    <input className="field" value={wa} onChange={(e) => setWa(e.target.value)} placeholder="9665…" />
+                  </Field>
+                </div>
+                <Field label={t.linkMill}>
+                  <select className="field" value={factoryId} onChange={(e) => setFactoryId(e.target.value)}>
+                    <option value="">—</option>
+                    {factories.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.legalName}
+                        {f.verified ? " ✓" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label={t.certifications}>
+                  <input className="field" value={certs} onChange={(e) => setCerts(e.target.value)} />
+                </Field>
                 <Field label="Bio">
                   <textarea className="field min-h-[110px]" value={bio} onChange={(e) => setBio(e.target.value)} />
+                </Field>
+                <Field label={t.coverageNotes}>
+                  <textarea className="field min-h-[70px]" value={coverageNotes} onChange={(e) => setCoverageNotes(e.target.value)} />
+                </Field>
+                <Field label={t.coverage} hint={t.citiesHint}>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {CITIES.map((c) => {
+                      const on = cities.includes(c);
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setCities((x) => (on ? x.filter((i) => i !== c) : [...x, c]))}
+                          className={`uplift rounded-full px-3 py-1 text-sm ${on ? "bg-molten text-black" : "bg-muted text-muted-foreground"}`}
+                        >
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </Field>
                 <Field label={t.specialties}>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -146,27 +253,65 @@ export default function ProfilePage() {
                           key={s}
                           type="button"
                           onClick={() => setSpecs((x) => (on ? x.filter((i) => i !== s) : [...x, s]))}
-                          className={`uplift rounded-full px-3 py-1 text-sm ${on ? "bg-molten text-black" : "bg-muted text-muted-foreground"}`}
+                          className={`uplift rounded-full px-3 py-1 text-sm capitalize ${on ? "bg-molten text-black" : "bg-muted text-muted-foreground"}`}
                         >
-                          {s}
+                          {pretty(s)}
                         </button>
                       );
                     })}
                   </div>
                 </Field>
-                <a className="block text-sm text-primary" href={`/p/${(me.salesman as { slug: string }).slug}`} target="_blank">
-                  {t.publicLink}
-                </a>
+                {slug && (
+                  <a className="block text-sm text-primary" href={`/p/${slug}`} target="_blank">
+                    {t.publicLink}
+                  </a>
+                )}
               </>
             )}
             <button className="btn-molten">{t.saveChanges}</button>
             {msg && <p className="text-sm text-molten">{msg}</p>}
           </form>
-          <aside className="uplift surface-slab h-fit rounded-2xl p-6 text-center">
-            <Avatar name={displayName || "A"} src={photo} size="lg" />
-            <div className="mt-3 font-display text-xl font-bold">{displayName || "—"}</div>
-            <div className="text-sm capitalize text-muted-foreground">{role.toLowerCase()}</div>
-            <Stars value={5} className="mt-3 justify-center text-lg" />
+          <aside className="uplift surface-slab h-fit rounded-2xl p-6">
+            <div className="text-center">
+              <Avatar name={displayName || "A"} src={photo} size="lg" />
+              <div className="mt-3 font-display text-xl font-bold">{displayName || "—"}</div>
+              <div className="text-sm text-muted-foreground">
+                {role === "SALESMAN" ? t.metalSalesman : role === "FACTORY" ? t.factoryRole : role.toLowerCase()}
+              </div>
+              <Stars value={5} className="mt-3 justify-center text-lg" />
+            </div>
+            {role === "SALESMAN" && (
+              <dl className="mt-5 space-y-3 border-t border-border pt-4 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">{t.trust}</dt>
+                  <dd className="font-medium text-molten">{trust}/10</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">{t.linkMill}</dt>
+                  <dd className="font-medium">{millName || "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t.coverage}</dt>
+                  <dd className="mt-1 flex flex-wrap gap-1">
+                    {cities.length ? cities.map((c) => (
+                      <span key={c} className="rounded border border-border px-2 py-0.5 text-xs">
+                        {c}
+                      </span>
+                    )) : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t.specialties}</dt>
+                  <dd className="mt-1 flex flex-wrap gap-1">
+                    {specs.length ? specs.map((c) => (
+                      <span key={c} className="rounded border border-border px-2 py-0.5 text-xs capitalize">
+                        {pretty(c)}
+                      </span>
+                    )) : "—"}
+                  </dd>
+                </div>
+              </dl>
+            )}
             <p className="mt-3 line-clamp-4 text-sm text-muted-foreground">{bio}</p>
           </aside>
         </div>
@@ -175,9 +320,9 @@ export default function ProfilePage() {
       {tab === "trust" && (
         <div className="uplift surface-slab mt-6 max-w-lg rounded-2xl p-6">
           <div className="text-xs uppercase tracking-widest text-muted-foreground">{t.trust}</div>
-          <div className="mt-2 font-display text-5xl font-bold">{trust}/100</div>
+            <div className="mt-2 font-display text-5xl font-bold">{trust}/10</div>
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-molten" style={{ width: `${trust}%` }} />
+            <div className="h-full rounded-full bg-molten" style={{ width: `${trust * 10}%` }} />
           </div>
           <p className="mt-4 text-sm text-muted-foreground">{t.how6b}</p>
         </div>

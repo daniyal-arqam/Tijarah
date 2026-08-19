@@ -7,6 +7,18 @@ import { prisma } from "../lib/prisma.js";
 import { env } from "../env.js";
 import { hashToken, newRefreshToken, refreshExpiry, signAccess } from "../lib/jwt.js";
 import { recalcTrustScore } from "../lib/trustScore.js";
+import {
+  exchangeGoogleCode,
+  fetchGoogleProfile,
+  frontendUrl,
+  googleAuthUrl,
+  googleConfigured,
+  signGooglePending,
+  signOAuthState,
+  verifyGooglePending,
+  verifyOAuthState,
+  type GoogleProfile,
+} from "../lib/googleOAuth.js";
 import type { Role } from "@prisma/client";
 
 export const authRouter = Router();
@@ -61,6 +73,40 @@ async function issueRefresh(res: import("express").Response, userId: string, rol
   res.cookie("refresh", raw, { ...cookieOpts, maxAge: 7 * 24 * 60 * 60 * 1000 });
 }
 
+const oauthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts, try in 15 minutes" },
+});
+
+async function createGoogleUser(profile: GoogleProfile, role: "SALESMAN" | "COMPANY") {
+  const passwordHash = await bcrypt.hash(`${randomBytes(32).toString("hex")}Aa1!`, 12);
+  const user = await prisma.user.create({
+    data: {
+      email: profile.email,
+      passwordHash,
+      role,
+      emailVerified: true,
+      salesman:
+        role === "SALESMAN"
+          ? {
+              create: {
+                displayName: profile.name,
+                slug: await uniqueSlug(profile.name),
+                photoUrl: profile.picture,
+              },
+            }
+          : undefined,
+      company: role === "COMPANY" ? { create: { legalName: profile.name, contactName: profile.name } } : undefined,
+    },
+    include: { salesman: true, company: true },
+  });
+  if (user.salesman) await recalcTrustScore(user.salesman.id);
+  return user;
+}
+
 const signupSchema = z.object({
   email: z.string().email().max(120),
   password: z
@@ -69,7 +115,7 @@ const signupSchema = z.object({
     .regex(/[A-Z]/)
     .regex(/[0-9]/)
     .regex(/[^A-Za-z0-9]/),
-  role: z.enum(["SALESMAN", "COMPANY"]),
+  role: z.enum(["SALESMAN", "COMPANY", "FACTORY"]),
   name: z.string().min(2).max(80),
 });
 
@@ -97,8 +143,9 @@ authRouter.post("/signup", loginLimiter, async (req, res) => {
           ? { create: { displayName: name, slug: await uniqueSlug(name) } }
           : undefined,
       company: role === "COMPANY" ? { create: { legalName: name } } : undefined,
+      factory: role === "FACTORY" ? { create: { legalName: name } } : undefined,
     },
-    include: { salesman: true, company: true },
+    include: { salesman: { include: { factory: true } }, company: true, factory: true },
   });
   if (user.salesman) await recalcTrustScore(user.salesman.id);
   await issueRefresh(res, user.id, user.role);
@@ -108,6 +155,7 @@ authRouter.post("/signup", loginLimiter, async (req, res) => {
     role: user.role,
     salesman: user.salesman,
     company: user.company,
+    factory: user.factory,
   });
 });
 
@@ -124,7 +172,7 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   }
   const user = await prisma.user.findUnique({
     where: { email: parsed.data.email.toLowerCase() },
-    include: { salesman: true, company: true },
+    include: { salesman: { include: { factory: true } }, company: true, factory: true },
   });
   if (!user || user.status !== "ACTIVE") {
     res.status(401).json({ error: "Invalid email or password" });
@@ -143,7 +191,126 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     locale: user.locale,
     salesman: user.salesman,
     company: user.company,
+    factory: user.factory,
   });
+});
+
+authRouter.get("/google", oauthLimiter, (req, res) => {
+  if (!googleConfigured()) {
+    res.redirect(frontendUrl("/login?error=google_not_configured"));
+    return;
+  }
+  const roleRaw = typeof req.query.role === "string" ? req.query.role : "";
+  const role = roleRaw === "SALESMAN" || roleRaw === "COMPANY" ? roleRaw : "";
+  res.redirect(googleAuthUrl(signOAuthState(role)));
+});
+
+authRouter.get("/google/callback", oauthLimiter, async (req, res) => {
+  const fail = (code: string, detail?: string) => {
+    console.error("Google OAuth failed:", code, detail ?? "");
+    const q = new URLSearchParams({ error: code });
+    if (detail && env.nodeEnv !== "production") q.set("detail", detail.slice(0, 180));
+    res.redirect(frontendUrl(`/login?${q.toString()}`));
+  };
+  if (req.query.error) {
+    fail(String(req.query.error) === "access_denied" ? "google_denied" : "google");
+    return;
+  }
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const state = typeof req.query.state === "string" ? req.query.state : "";
+  if (!code || !state) {
+    fail("google", "Missing Google code");
+    return;
+  }
+  let role = "";
+  try {
+    role = verifyOAuthState(state);
+  } catch {
+    fail("google", "Invalid OAuth state");
+    return;
+  }
+  try {
+    const tokens = await exchangeGoogleCode(code);
+    const profile = await fetchGoogleProfile(tokens.access_token);
+    const existing = await prisma.user.findUnique({ where: { email: profile.email } });
+    if (existing) {
+      if (existing.status !== "ACTIVE") {
+        fail("google", "Account is suspended");
+        return;
+      }
+      await issueRefresh(res, existing.id, existing.role);
+      res.redirect(frontendUrl("/app"));
+      return;
+    }
+    if (role === "SALESMAN" || role === "COMPANY") {
+      const user = await createGoogleUser(profile, role);
+      await issueRefresh(res, user.id, user.role);
+      res.redirect(frontendUrl("/app"));
+      return;
+    }
+    res.cookie("google_pending", signGooglePending(profile), { ...cookieOpts, maxAge: 10 * 60 * 1000 });
+    res.redirect(frontendUrl("/signup?google=1"));
+  } catch (err) {
+    fail("google", err instanceof Error ? err.message : "Unknown error");
+  }
+});
+
+authRouter.get("/google/pending", (req, res) => {
+  const raw = req.cookies?.google_pending as string | undefined;
+  if (!raw) {
+    res.status(404).json({ error: "No Google signup in progress" });
+    return;
+  }
+  try {
+    const pending = verifyGooglePending(raw);
+    res.json({ email: pending.email, name: pending.name });
+  } catch {
+    res.clearCookie("google_pending", { path: "/" });
+    res.status(400).json({ error: "Google signup expired. Try again." });
+  }
+});
+
+authRouter.post("/google/complete", oauthLimiter, async (req, res) => {
+  const parsed = z
+    .object({
+      role: z.enum(["SALESMAN", "COMPANY"]),
+      name: z.string().min(2).max(80).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Pick salesman or company" });
+    return;
+  }
+  const raw = req.cookies?.google_pending as string | undefined;
+  if (!raw) {
+    res.status(400).json({ error: "Google signup expired. Try again." });
+    return;
+  }
+  try {
+    const pending = verifyGooglePending(raw);
+    const exists = await prisma.user.findUnique({ where: { email: pending.email } });
+    if (exists) {
+      res.clearCookie("google_pending", { path: "/" });
+      await issueRefresh(res, exists.id, exists.role);
+      res.json({ id: exists.id, email: exists.email, role: exists.role });
+      return;
+    }
+    const user = await createGoogleUser(
+      { ...pending, sub: pending.email, name: parsed.data.name?.trim() || pending.name },
+      parsed.data.role,
+    );
+    res.clearCookie("google_pending", { path: "/" });
+    await issueRefresh(res, user.id, user.role);
+    res.status(201).json({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      salesman: user.salesman,
+      company: user.company,
+    });
+  } catch {
+    res.status(400).json({ error: "Google signup expired. Try again." });
+  }
 });
 
 authRouter.post("/logout", async (req, res) => {
@@ -248,7 +415,7 @@ authRouter.get("/me", async (req, res) => {
     const payload = verifyAccess(token);
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      include: { salesman: true, company: true },
+      include: { salesman: { include: { factory: true } }, company: true, factory: true },
     });
     if (!user) {
       res.status(401).json({ error: "Unauthorized" });
@@ -261,6 +428,7 @@ authRouter.get("/me", async (req, res) => {
       locale: user.locale,
       salesman: user.salesman,
       company: user.company,
+      factory: user.factory,
     });
   } catch {
     res.status(401).json({ error: "Unauthorized" });

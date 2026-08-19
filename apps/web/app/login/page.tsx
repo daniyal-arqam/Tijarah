@@ -1,25 +1,32 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/components/Providers";
 import { BrandMark } from "@/components/marketing/BrandMark";
 
-export default function LoginPage() {
+function Form() {
   const { t } = useI18n();
   const router = useRouter();
+  const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [err, setErr] = useState("");
-  const [googleMsg, setGoogleMsg] = useState("");
 
   useEffect(() => {
     const saved = localStorage.getItem("tijarah-email");
     if (saved) setEmail(saved);
-  }, []);
+    const code = params.get("error");
+    if (code === "google_not_configured") setErr(t.googleNotConfigured);
+    else if (code === "google_denied") setErr(t.googleDenied);
+    else if (code === "google") {
+      const detail = params.get("detail");
+      setErr(detail ? `${t.googleError} ${detail}` : t.googleError);
+    }
+  }, [params, t.googleDenied, t.googleError, t.googleNotConfigured]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -61,14 +68,9 @@ export default function LoginPage() {
             {t.or}
             <span className="h-px flex-1 bg-border" />
           </div>
-          <button
-            type="button"
-            className="btn-steel w-full py-3"
-            onClick={() => setGoogleMsg(t.googleHint)}
-          >
+          <a href="/auth/google" className="btn-steel w-full py-3">
             {t.google}
-          </button>
-          {googleMsg && <p className="mt-3 text-sm text-muted-foreground">{googleMsg}</p>}
+          </a>
           <p className="mt-5 text-center text-sm text-muted-foreground">
             {t.newTo}{" "}
             <Link href="/signup" className="text-primary">
@@ -81,5 +83,13 @@ export default function LoginPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <Form />
+    </Suspense>
   );
 }

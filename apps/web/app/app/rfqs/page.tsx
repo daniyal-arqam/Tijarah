@@ -6,6 +6,14 @@ import { PageHead } from "@/components/PageHead";
 import { useI18n } from "@/components/Providers";
 import { Field, StatusBadge } from "@/components/ui";
 
+type Estimate = {
+  id: string;
+  status: string;
+  amount?: number | null;
+  readyBy?: string | null;
+  factory?: { id: string; legalName: string } | null;
+};
+type ProposalRow = { id: string; status: string; sellPrice?: number | null; salesman: { displayName: string; trustScore: number } };
 type Rfq = {
   id: string;
   title: string;
@@ -15,20 +23,20 @@ type Rfq = {
   unit?: string;
   destinationCity?: string;
   specs?: string;
-  salesmanId: string;
-  salesman?: { displayName: string };
+  customize?: boolean;
   company?: { legalName: string };
+  estimates?: Estimate[];
+  proposals?: ProposalRow[];
+  proposalCount?: number;
 };
-
-type Salesman = { id: string; displayName: string; match: number; trustScore: number; slug: string };
+type Factory = { id: string; legalName: string };
 
 export default function RfqsPage() {
   const { t } = useI18n();
   const [me, setMe] = useState<{ role: string } | null>(null);
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
-  const [salesmen, setSalesmen] = useState<Salesman[]>([]);
+  const [factories, setFactories] = useState<Factory[]>([]);
   const [form, setForm] = useState({
-    salesmanId: "",
     title: "",
     specialty: "rebar",
     specs: "",
@@ -36,56 +44,45 @@ export default function RfqsPage() {
     unit: "ton",
     destinationCity: "Riyadh",
     neededBy: "",
+    customize: false,
   });
-  const [quoteForm, setQuoteForm] = useState({
-    rfqId: "",
-    product: "",
-    quantity: 1,
-    unitPrice: 0,
-    factoryCostEstimate: 0,
-    paymentTerms: "NET_30" as const,
-    deliveryDate: "",
-  });
+  const [pickMill, setPickMill] = useState<Record<string, string>>({});
+  const [sell, setSell] = useState<Record<string, number>>({});
   const [msg, setMsg] = useState("");
+
+  async function load() {
+    setRfqs(await api("/api/rfqs"));
+  }
 
   useEffect(() => {
     api("/auth/me").then(async (u) => {
       setMe(u);
       setRfqs(await api("/api/rfqs"));
-      if (u.role === "COMPANY") setSalesmen(await api("/api/salesmen"));
+      if (u.role === "SALESMAN") setFactories(await api("/api/factories").catch(() => []));
     });
   }, []);
 
-  const subtotal = quoteForm.quantity * quoteForm.unitPrice;
-  const vat = Math.round(subtotal * 0.15 * 100) / 100;
-  const total = Math.round((subtotal + vat) * 100) / 100;
-  const margin = Math.round((subtotal - quoteForm.factoryCostEstimate) * 100) / 100;
-
   return (
     <div>
-      <PageHead title={t.rfqs} subtitle={t.rfqsSub} />
+      <PageHead title={me?.role === "COMPANY" ? t.listNeed : t.openNeeds} subtitle={t.rfqsSub} />
       {me?.role === "COMPANY" && (
         <form
           className="surface-slab mt-6 grid gap-4 rounded-2xl p-6 md:grid-cols-2"
           onSubmit={async (e) => {
             e.preventDefault();
             await api("/api/rfqs", { method: "POST", body: JSON.stringify(form) });
-            setMsg(t.sendRfq);
-            setRfqs(await api("/api/rfqs"));
+            setMsg(t.needListed);
+            await load();
           }}
         >
-          <Field label={t.selectSupplier} hint={t.selectSupplierHint}>
-            <select className="field" required value={form.salesmanId} onChange={(e) => setForm({ ...form, salesmanId: e.target.value })}>
-              <option value="">{t.selectSupplier}</option>
-              {salesmen.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.displayName} · {s.match}% match · {t.trust} {s.trustScore}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label={t.rfqTitle} hint={t.rfqTitleHint}>
             <input className="field" required placeholder="Rebar B500B 16mm — 40 tons" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </Field>
+          <Field label={t.buyOrCustomize}>
+            <select className="field" value={form.customize ? "custom" : "buy"} onChange={(e) => setForm({ ...form, customize: e.target.value === "custom" })}>
+              <option value="buy">{t.buyReady}</option>
+              <option value="custom">{t.customizeProduct}</option>
+            </select>
           </Field>
           <Field label={t.specialtyLabel} hint={t.specialtyHint}>
             <select className="field" value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })}>
@@ -117,99 +114,130 @@ export default function RfqsPage() {
               <textarea className="field min-h-[90px]" required placeholder="Grade, diameter, mill certs, length, coating…" value={form.specs} onChange={(e) => setForm({ ...form, specs: e.target.value })} />
             </Field>
           </div>
-          <button className="btn-molten md:col-span-2">{t.sendRfq}</button>
-        </form>
-      )}
-      {me?.role === "SALESMAN" && (
-        <form
-          className="surface-slab mt-6 grid gap-4 rounded-2xl p-6 md:grid-cols-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const created = await api("/api/quotes", {
-              method: "POST",
-              body: JSON.stringify({
-                rfqId: quoteForm.rfqId,
-                factoryCostEstimate: quoteForm.factoryCostEstimate,
-                paymentTerms: quoteForm.paymentTerms,
-                deliveryDate: quoteForm.deliveryDate || undefined,
-                lines: [{ product: quoteForm.product, quantity: quoteForm.quantity, unitPrice: quoteForm.unitPrice }],
-              }),
-            });
-            setMsg(`${t.sendQuote} · ${created.total} SAR`);
-          }}
-        >
-          <div className="md:col-span-2 text-sm text-muted-foreground">{t.sendQuoteHint}</div>
-          <Field label={t.selectRfq} hint={t.selectRfqHint}>
-            <select className="field" required value={quoteForm.rfqId} onChange={(e) => setQuoteForm({ ...quoteForm, rfqId: e.target.value })}>
-              <option value="">{t.selectRfq}</option>
-              {rfqs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.title} · {r.company?.legalName}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t.productLine} hint={t.productLineHint}>
-            <input className="field" required placeholder="Rebar B500B 16mm" value={quoteForm.product} onChange={(e) => setQuoteForm({ ...quoteForm, product: e.target.value })} />
-          </Field>
-          <Field label={t.quantityLabel} hint={t.qtySameAsRfq}>
-            <input type="number" min={0.01} step="0.01" className="field" value={quoteForm.quantity} onChange={(e) => setQuoteForm({ ...quoteForm, quantity: Number(e.target.value) })} />
-          </Field>
-          <Field label={t.unitPriceLabel} hint={t.unitPriceHint}>
-            <input type="number" min={0} step="0.01" className="field" value={quoteForm.unitPrice} onChange={(e) => setQuoteForm({ ...quoteForm, unitPrice: Number(e.target.value) })} />
-          </Field>
-          <Field label={t.factoryCostLabel} hint={t.factoryPrivate}>
-            <input type="number" min={0} step="0.01" className="field border-primary/40 bg-primary/5" value={quoteForm.factoryCostEstimate} onChange={(e) => setQuoteForm({ ...quoteForm, factoryCostEstimate: Number(e.target.value) })} />
-          </Field>
-          <Field label={t.terms} hint={t.termsHint}>
-            <select className="field" value={quoteForm.paymentTerms} onChange={(e) => setQuoteForm({ ...quoteForm, paymentTerms: e.target.value as typeof quoteForm.paymentTerms })}>
-              <option value="ADVANCE_50">Advance 50%</option>
-              <option value="NET_15">Net 15</option>
-              <option value="NET_30">Net 30</option>
-              <option value="NET_45">Net 45</option>
-              <option value="COD">COD</option>
-            </select>
-          </Field>
-          <Field label={t.delivery} hint={t.deliveryHint}>
-            <input type="date" className="field" value={quoteForm.deliveryDate} onChange={(e) => setQuoteForm({ ...quoteForm, deliveryDate: e.target.value })} />
-          </Field>
-          <div className="surface-extrude md:col-span-2 rounded-xl p-4 text-sm">
-            <div className="flex justify-between">
-              <span>{t.subtotal}</span>
-              <span>{subtotal.toLocaleString()} SAR</span>
-            </div>
-            <div className="flex justify-between text-muted-foreground">
-              <span>VAT 15%</span>
-              <span>{vat.toLocaleString()} SAR</span>
-            </div>
-            <div className="mt-2 flex justify-between font-semibold text-molten">
-              <span>{t.amount} ({t.companySees})</span>
-              <span>{total.toLocaleString()} SAR</span>
-            </div>
-            <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-              <span>{t.margin} — {t.private}</span>
-              <span>{margin.toLocaleString()} SAR</span>
-            </div>
-          </div>
-          <button className="btn-molten md:col-span-2">{t.sendQuote}</button>
+          <button className="btn-molten md:col-span-2">{t.listNeed}</button>
         </form>
       )}
       {msg && <p className="mt-3 text-molten">{msg}</p>}
-      <ul className="mt-8 space-y-3">
-        {rfqs.map((r) => (
-          <li key={r.id} className="uplift surface-slab rounded-xl p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-medium">{r.title}</div>
-              <StatusBadge status={r.status} />
-            </div>
-            <div className="mt-1 text-sm text-muted-foreground">
-              {r.company?.legalName} → {r.salesman?.displayName}
-              {r.quantity != null && ` · ${r.quantity} ${r.unit || ""}`}
-              {r.destinationCity && ` · ${r.destinationCity}`}
-            </div>
-            {r.specs && <p className="mt-2 text-sm text-muted-foreground">{r.specs}</p>}
-          </li>
-        ))}
+      <ul className="mt-8 space-y-4">
+        {rfqs.map((r) => {
+          const quoted = (r.estimates ?? []).filter((e) => e.status === "QUOTED" || e.status === "ACCEPTED");
+          const ranked = [...quoted].sort((a, b) => (a.amount ?? 1e15) - (b.amount ?? 1e15) || new Date(a.readyBy || 0).getTime() - new Date(b.readyBy || 0).getTime());
+          const millCost = ranked[0]?.amount ?? 0;
+          const sellPrice = sell[r.id] ?? (millCost ? millCost + 100 : 0);
+          return (
+            <li key={r.id} className="uplift surface-slab rounded-xl p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-medium">{r.title}</div>
+                <div className="flex gap-2">
+                  {r.customize && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">{t.customizeProduct}</span>}
+                  <StatusBadge status={r.status} />
+                </div>
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {me?.role === "COMPANY" ? `${r.proposalCount ?? r.proposals?.length ?? 0} ${t.proposals}` : r.company?.legalName}
+                {r.quantity != null && ` · ${r.quantity} ${r.unit || ""}`}
+                {r.destinationCity && ` · ${r.destinationCity}`}
+              </div>
+              {r.specs && <p className="mt-2 text-sm text-muted-foreground">{r.specs}</p>}
+
+              {me?.role === "COMPANY" && (r.proposals?.length ?? 0) > 0 && (
+                <ul className="mt-4 space-y-2 text-sm">
+                  {r.proposals!.map((p) => (
+                    <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2">
+                      <span>
+                        {p.salesman.displayName} · {t.trust} {p.salesman.trustScore}/10
+                      </span>
+                      <span className="font-medium text-molten">{p.sellPrice?.toLocaleString()} SAR</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {me?.role === "SALESMAN" && (
+                <div className="mt-4 space-y-3 border-t border-border pt-4">
+                  <div className="flex flex-wrap gap-2">
+                    <select className="field mt-0 max-w-xs" value={pickMill[r.id] ?? ""} onChange={(e) => setPickMill((m) => ({ ...m, [r.id]: e.target.value }))}>
+                      <option value="">{t.pickFactory}</option>
+                      {factories.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.legalName}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn-steel h-10 px-3 text-xs"
+                      onClick={async () => {
+                        if (!pickMill[r.id]) return;
+                        await api("/api/estimates", { method: "POST", body: JSON.stringify({ rfqId: r.id, factoryId: pickMill[r.id] }) });
+                        setMsg(t.estimateRequested);
+                        await load();
+                      }}
+                    >
+                      {t.requestEstimate}
+                    </button>
+                  </div>
+                  {ranked.length > 0 && (
+                    <ul className="space-y-2 text-sm">
+                      {ranked.map((e, i) => (
+                        <li key={e.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2">
+                          <span>
+                            {e.factory?.legalName} · {e.amount?.toLocaleString()} SAR · {e.readyBy ? e.readyBy.slice(0, 10) : "—"}
+                            {i === 0 && <span className="ms-2 text-xs text-emerald-400">{t.bestMill}</span>}
+                          </span>
+                          {e.status !== "ACCEPTED" && (
+                            <button
+                              className="text-xs text-primary"
+                              onClick={async () => {
+                                await api(`/api/estimates/${e.id}/accept`, { method: "POST" });
+                                await load();
+                              }}
+                            >
+                              {t.pickFactory}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Field label={t.yourRate}>
+                      <input
+                        type="number"
+                        min={0}
+                        className="field mt-0 w-36"
+                        value={sellPrice}
+                        onChange={(e) => setSell((s) => ({ ...s, [r.id]: Number(e.target.value) }))}
+                      />
+                    </Field>
+                    {millCost > 0 && (
+                      <div className="pb-2 text-xs text-muted-foreground">
+                        {t.factoryCost} {millCost.toLocaleString()} · {t.yourProfit} {(sellPrice - millCost).toLocaleString()} SAR
+                      </div>
+                    )}
+                    <button
+                      className="btn-molten h-10 px-3 text-xs"
+                      onClick={async () => {
+                        await api("/api/proposals", {
+                          method: "POST",
+                          body: JSON.stringify({
+                            rfqId: r.id,
+                            sellPrice,
+                            factoryCost: millCost || undefined,
+                            subject: `${r.title} — ${sellPrice} SAR`,
+                            body: `I will ready this order and deliver to ${r.destinationCity} at ${sellPrice} SAR.`,
+                          }),
+                        });
+                        setMsg(t.proposalSent);
+                      }}
+                    >
+                      {t.sendProposal}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

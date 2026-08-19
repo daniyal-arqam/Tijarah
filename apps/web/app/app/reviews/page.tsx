@@ -13,26 +13,42 @@ type Review = {
   professionalism: number;
   body: string;
   createdAt: string;
-  order?: { company?: { legalName: string } };
+  from?: string;
+  authorRole?: string;
+  order?: { company?: { legalName: string }; factory?: { legalName: string } };
 };
-type Order = { id: string; status: string; review?: { id: string } | null; company?: { legalName: string }; quote?: { rfq?: { title: string } } };
+type Order = {
+  id: string;
+  status: string;
+  factoryPaid?: boolean;
+  reviews?: { authorId?: string; authorRole?: string }[];
+  review?: { id: string } | null;
+  company?: { legalName: string };
+  salesman?: { displayName: string };
+  quote?: { rfq?: { title: string } };
+};
 
 export default function ReviewsPage() {
   const { t } = useI18n();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [me, setMe] = useState<{ role: string } | null>(null);
+  const [me, setMe] = useState<{ role: string; id?: string } | null>(null);
   const [form, setForm] = useState({ orderId: "", quality: 5, deliverySpeed: 5, professionalism: 5, body: "" });
 
   useEffect(() => {
     api("/auth/me").then(async (u) => {
       setMe(u);
       setReviews(await api("/api/reviews"));
-      if (u.role === "COMPANY") setOrders(await api("/api/orders"));
+      if (u.role === "COMPANY" || u.role === "FACTORY") setOrders(await api("/api/orders"));
     });
   }, []);
 
-  const unlocked = orders.filter((o) => o.status === "RECEIVED" && !o.review);
+  const unlocked = orders.filter((o) => {
+    const already = (o.reviews ?? []).some((r) => r.authorRole === me?.role) || Boolean(o.review);
+    if (me?.role === "COMPANY") return o.status === "RECEIVED" && !already;
+    if (me?.role === "FACTORY") return Boolean(o.factoryPaid) && !already;
+    return false;
+  });
   const avg = (r: Review) => (r.quality + r.deliverySpeed + r.professionalism) / 3;
   const overall = reviews.length ? reviews.reduce((s, r) => s + avg(r), 0) / reviews.length : 0;
   const dist = useMemo(() => {
@@ -44,7 +60,7 @@ export default function ReviewsPage() {
 
   return (
     <div>
-      <PageHead title={t.reviews} subtitle={t.reviewsFromBuyers} />
+      <PageHead title={t.reviews} subtitle={t.reviewsBothSides} />
       <div className="uplift card-flip mt-7 flex flex-wrap items-center gap-8 rounded-2xl p-6">
         <div>
           <div className="font-display text-5xl font-bold">{reviews.length ? overall.toFixed(1) : "—"}</div>
@@ -66,7 +82,7 @@ export default function ReviewsPage() {
         </div>
       </div>
 
-      {me?.role === "COMPANY" && (
+      {(me?.role === "COMPANY" || me?.role === "FACTORY") && (
         <form
           className="surface-slab mt-6 grid gap-4 rounded-2xl p-6 md:grid-cols-3"
           onSubmit={async (e) => {
@@ -81,7 +97,7 @@ export default function ReviewsPage() {
               <option value="">{t.selectOrder}</option>
               {unlocked.map((o) => (
                 <option key={o.id} value={o.id}>
-                  {o.quote?.rfq?.title || o.id.slice(0, 8)}
+                  {o.quote?.rfq?.title || o.salesman?.displayName || o.id.slice(0, 8)}
                 </option>
               ))}
             </select>
@@ -125,17 +141,22 @@ export default function ReviewsPage() {
       )}
 
       <ul className="mt-8 space-y-4">
-        {reviews.map((r) => (
-          <li key={r.id} className="uplift card-flip rounded-2xl p-5">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="font-semibold">{r.order?.company?.legalName || t.company}</div>
-              <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs text-emerald-400">{t.verifiedOrder}</span>
-              <span className="ms-auto text-xs text-muted-foreground">{r.createdAt.slice(0, 10)}</span>
-            </div>
-            <Stars value={avg(r)} className="mt-2" />
-            <p className="mt-2 text-sm text-muted-foreground">{r.body}</p>
-          </li>
-        ))}
+        {reviews.map((r) => {
+          const from = r.from || r.authorRole;
+          const label = from === "FACTORY" ? t.fromFactory : t.fromCompany;
+          const name = from === "FACTORY" ? r.order?.factory?.legalName : r.order?.company?.legalName;
+          return (
+            <li key={r.id} className="uplift card-flip rounded-2xl p-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="font-semibold">{name || label}</div>
+                <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs text-emerald-400">{label}</span>
+                <span className="ms-auto text-xs text-muted-foreground">{r.createdAt.slice(0, 10)}</span>
+              </div>
+              <Stars value={avg(r)} className="mt-2" />
+              <p className="mt-2 text-sm text-muted-foreground">{r.body}</p>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

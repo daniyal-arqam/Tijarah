@@ -11,8 +11,8 @@ import { Avatar, Icon } from "./ui";
 const SALES_NAV = [
   { href: "/app", key: "dashboard" as const, icon: "dash" },
   { href: "/app/leads", key: "leads" as const, icon: "leads" },
+  { href: "/app/rfqs", key: "openNeeds" as const, icon: "quote" },
   { href: "/app/outreach", key: "outreach" as const, icon: "mail" },
-  { href: "/app/rfqs", key: "rfqs" as const, icon: "quote" },
   { href: "/app/quotes", key: "quotes" as const, icon: "quote" },
   { href: "/app/orders", key: "orders" as const, icon: "order" },
   { href: "/app/invoices", key: "invoices" as const, icon: "invoice" },
@@ -22,12 +22,22 @@ const SALES_NAV = [
 
 const COMPANY_NAV = [
   { href: "/app", key: "dashboard" as const, icon: "dash" },
+  { href: "/app/rfqs", key: "listNeed" as const, icon: "quote" },
+  { href: "/app/inbox", key: "inbox" as const, icon: "mail" },
   { href: "/app/suppliers", key: "suppliers" as const, icon: "leads" },
-  { href: "/app/rfqs", key: "rfqs" as const, icon: "quote" },
   { href: "/app/quotes", key: "quotes" as const, icon: "quote" },
   { href: "/app/orders", key: "orders" as const, icon: "order" },
   { href: "/app/invoices", key: "invoices" as const, icon: "invoice" },
   { href: "/app/reviews", key: "reviews" as const, icon: "star" },
+  { href: "/app/profile", key: "profile" as const, icon: "user" },
+];
+
+const FACTORY_NAV = [
+  { href: "/app", key: "dashboard" as const, icon: "dash" },
+  { href: "/app/estimates", key: "estimates" as const, icon: "quote" },
+  { href: "/app/orders", key: "jobs" as const, icon: "order" },
+  { href: "/app/reviews", key: "reviews" as const, icon: "star" },
+  { href: "/app/team", key: "linkedSalesmen" as const, icon: "leads" },
   { href: "/app/profile", key: "profile" as const, icon: "user" },
 ];
 
@@ -50,24 +60,31 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   useEffect(() => {
-    Promise.all([api("/api/quotes").catch(() => []), api("/api/orders").catch(() => [])]).then(([quotes, orders]) => {
-      const n = [
-        ...quotes.slice(0, 3).map((x: { status: string; id: string }) => ({
-          title: `Quote ${x.id.slice(0, 8)} · ${x.status}`,
-          meta: t.quotes,
-        })),
-        ...orders.slice(0, 3).map((x: { status: string; id: string }) => ({
-          title: `Order ${x.id.slice(0, 8)} · ${x.status}`,
-          meta: t.orders,
-        })),
-      ];
-      setNotes(n);
-    });
+    api("/api/notifications")
+      .then((rows: { title: string; body: string; read?: boolean }[]) => {
+        setNotes(rows.slice(0, 8).map((x) => ({ title: x.title, meta: x.body })));
+      })
+      .catch(() => {
+        Promise.all([api("/api/quotes").catch(() => []), api("/api/orders").catch(() => [])]).then(([quotes, orders]) => {
+          const n = [
+            ...quotes.slice(0, 3).map((x: { status: string; id: string }) => ({
+              title: `Quote ${x.id.slice(0, 8)} · ${x.status}`,
+              meta: t.quotes,
+            })),
+            ...orders.slice(0, 3).map((x: { status: string; id: string }) => ({
+              title: `Order ${x.id.slice(0, 8)} · ${x.status}`,
+              meta: t.orders,
+            })),
+          ];
+          setNotes(n);
+        });
+      });
   }, [t.quotes, t.orders]);
 
   const items = useMemo(() => {
     if (!me) return [];
     if (me.role === "COMPANY") return COMPANY_NAV;
+    if (me.role === "FACTORY") return FACTORY_NAV;
     if (me.role === "ADMIN") return ADMIN_NAV;
     return SALES_NAV;
   }, [me]);
@@ -76,7 +93,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     return <div className="grid min-h-screen place-items-center text-muted-foreground">{t.loading}</div>;
   }
 
-  const name = me.salesman?.displayName || me.company?.legalName || me.email;
+  const name = me.salesman?.displayName || me.company?.legalName || me.factory?.legalName || me.email;
   const photo = me.salesman?.photoUrl || me.company?.logoUrl;
 
   function searchGo(e: React.FormEvent) {

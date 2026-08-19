@@ -84,6 +84,42 @@ export default function Dashboard() {
   const name = me.salesman?.displayName || me.company?.legalName || "there";
   const isCompany = "spendThisMonth" in data;
   const isAdmin = "gmv" in data;
+  const isFactory = me.role === "FACTORY";
+
+  if (isFactory) {
+    const mill = data.mill as { legalName?: string } | undefined;
+    const team = (data.salesmen as { displayName: string; orders: number }[]) ?? [];
+    const jobs = (data.recentJobs as { id: string; status: string; jobAmount?: number; salesman?: { displayName: string } }[]) ?? [];
+    return (
+      <div>
+        <h1 className="font-display text-3xl font-bold">{mill?.legalName || t.factoryRole}</h1>
+        <p className="mt-1 text-muted-foreground">{t.millJobsSub}</p>
+        <div className="mt-7 grid gap-4 sm:grid-cols-3">
+          <Kpi label={t.estimates} value={String(data.pendingEstimates ?? 0)} sub={t.pending} icon="quote" tone="gold" />
+          <Kpi label={t.jobs} value={String(data.openJobs ?? 0)} sub={t.inProgress} icon="order" tone="teal" />
+          <Kpi label={t.factoryCost} value={`${Number(data.unpaidMill ?? 0).toLocaleString()} SAR`} sub={t.unpaidMill} icon="trend" tone="orange" />
+        </div>
+        <ul className="mt-6 space-y-3">
+          {jobs.map((j) => (
+            <li key={j.id} className="uplift surface-slab flex justify-between rounded-xl p-4 text-sm">
+              <span>
+                {j.salesman?.displayName} · {j.status}
+              </span>
+              <span className="text-molten">{j.jobAmount?.toLocaleString()} SAR</span>
+            </li>
+          ))}
+          {team.map((s) => (
+            <li key={s.displayName} className="uplift surface-slab flex justify-between rounded-xl p-4 text-sm">
+              <span>{s.displayName}</span>
+              <span className="text-muted-foreground">
+                {s.orders} {t.orders}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
 
   if (isAdmin) {
     return (
@@ -111,14 +147,14 @@ export default function Dashboard() {
             <Kpi label={t.spendMonth} value={`${Number(data.spendThisMonth).toLocaleString()} SAR`} sub={t.thisMonth} icon="trend" tone="orange" />
             <Kpi label={t.inProgress} value={String(data.inProgress)} sub={t.orders} icon="order" tone="teal" />
             <Kpi label={t.openRfqs} value={String(data.openRfqs)} sub={t.rfqs} icon="quote" tone="gold" />
-            <Kpi label={t.rating} value={rating ? rating.toFixed(1) : "—"} sub={`${reviews.length} ${t.reviews}`} icon="star" tone="green" />
+            <Kpi label={t.inbox} value={String(data.openProposals ?? 0)} sub={t.inbox} icon="mail" tone="green" />
           </>
         ) : (
           <>
             <Kpi
               label={t.revenue}
               value={`${Number(data.paidRevenue).toLocaleString()} SAR`}
-              sub={`+12% ${t.thisMonth}`}
+              sub={`${t.yourProfit} ${Number(data.profitEarned ?? 0).toLocaleString()} SAR`}
               icon="trend"
               tone="orange"
               up
@@ -131,7 +167,13 @@ export default function Dashboard() {
               icon="quote"
               tone="gold"
             />
-            <Kpi label={t.rating} value={rating ? rating.toFixed(1) : String(data.trustScore)} sub={`${reviews.length} ${t.reviews}`} icon="star" tone="green" />
+            <Kpi
+              label={t.rating}
+              value={rating ? rating.toFixed(1) : `${data.trustScore ?? "—"}/10`}
+              sub={`${reviews.length} ${t.reviews}`}
+              icon="star"
+              tone="green"
+            />
           </>
         )}
       </div>

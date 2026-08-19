@@ -4,81 +4,70 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHead } from "@/components/PageHead";
 import { useI18n } from "@/components/Providers";
-import { Field, Icon } from "@/components/ui";
+import { Field, Icon, StatusBadge } from "@/components/ui";
 
 const TEMPLATES = [
   {
     id: "intro",
     name: "Product Introduction",
     subject: "Mill-direct supply for {company_name}",
-    body: "Hello {contact_name},\n\nI supply mill-direct structural steel across the Kingdom and can cover {company_name} on rebar, plate and coil with mill certs on every lot.",
+    body: "Hello {contact_name},\n\nI can cover {company_name} on rebar, plate and coil with mill certs on every lot. Open my Tijarah profile to see my desk, trust score and reviews.",
   },
   {
     id: "deal",
     name: "New Deal Alert",
     subject: "Allocation just released — {company_name}",
-    body: "We just secured an allocation of duplex plate at below-index pricing. Happy to hold tonnage for {company_name} until Thursday.",
-  },
-  {
-    id: "discount",
-    name: "Discount Offer",
-    subject: "Mill-direct steel allocation for {company_name}",
-    body: "For orders confirmed this month we can release a {discount}% reduction on rebar tonnage for {company_name}.",
+    body: "We just secured an allocation of plate this month for {company_name}. Happy to walk the spec from my Tijarah profile.",
   },
   {
     id: "follow",
     name: "Follow-up",
     subject: "Following up — {company_name}",
-    body: "Following our conversation last week — I've held the tonnage for {company_name} until Thursday. Quote {quote_id} is still open.",
-  },
-  {
-    id: "remind",
-    name: "Quote Reminder",
-    subject: "Quote {quote_id} expires in 48 hours",
-    body: "Your open quote expires in 48 hours. Happy to revise terms if delivery is the blocker for {company_name}.",
+    body: "Following our last note — I've held tonnage for {company_name}. Happy to walk the spec on a call.",
   },
 ];
 
 type Company = { id: string; legalName: string; city?: string; contactName?: string };
-type Campaign = {
+type Proposal = {
   id: string;
   subject: string;
-  template: string;
-  recipients: string[];
-  status: "draft" | "sent";
-  sentAt?: string;
-  opens: number;
-  clicks: number;
+  status: string;
+  sentAt: string;
+  openedAt?: string | null;
+  followUpDue?: boolean;
+  companyName?: string;
+  profileUrl?: string;
+  sellPrice?: number | null;
+  profit?: number | null;
+  factoryCost?: number | null;
 };
-
-const KEY = "tijarah-campaigns";
-
-function loadCampaigns(): Campaign[] {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function fill(s: string, vars: Record<string, string>) {
-  return s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
-}
 
 export default function OutreachPage() {
   const { t } = useI18n();
   const [tab, setTab] = useState<"compose" | "tracking">("compose");
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [tpl, setTpl] = useState(TEMPLATES[2]);
+  const [tpl, setTpl] = useState(TEMPLATES[0]);
   const [picked, setPicked] = useState<string[]>([]);
-  const [subject, setSubject] = useState(TEMPLATES[2].subject);
-  const [body, setBody] = useState(TEMPLATES[2].body);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [subject, setSubject] = useState(TEMPLATES[0].subject);
+  const [body, setBody] = useState(TEMPLATES[0].body);
+  const [rows, setRows] = useState<Proposal[]>([]);
+  const [mill, setMill] = useState("our mill");
   const [msg, setMsg] = useState("");
 
+  async function load() {
+    const [cos, props, me] = await Promise.all([
+      api("/api/companies").catch(() => []),
+      api("/api/proposals").catch(() => []),
+      api("/api/me").catch(() => null),
+    ]);
+    setCompanies(cos);
+    setRows(props);
+    const name = me?.salesman?.factory?.legalName;
+    if (name) setMill(name);
+  }
+
   useEffect(() => {
-    api("/api/companies").then(setCompanies).catch(() => setCompanies([]));
-    setCampaigns(loadCampaigns());
+    load();
   }, []);
 
   function choose(next: (typeof TEMPLATES)[0]) {
@@ -88,82 +77,52 @@ export default function OutreachPage() {
   }
 
   const first = companies.find((c) => picked.includes(c.id)) ?? companies[0];
-  const vars = {
+  const vars: Record<string, string> = {
     company_name: first?.legalName || "company",
     contact_name: first?.contactName || "there",
-    discount: "4",
-    quote_id: "Q-1188",
+    mill_name: mill,
   };
-
-  const sent = campaigns.filter((c) => c.status === "sent");
-  const emailsSent = sent.reduce((s, c) => s + c.recipients.length, 0) || sent.length;
-  const openRate = sent.length ? Math.round(sent.reduce((s, c) => s + c.opens, 0) / sent.length) : 0;
-  const clickRate = sent.length ? Math.round(sent.reduce((s, c) => s + c.clicks, 0) / sent.length) : 0;
-
-  const stats = [
-    { label: t.emailsSent, value: String(emailsSent || 0), sub: `+18% ${t.last30}`, icon: "plane", tone: "orange" as const, up: true },
-    { label: t.openRate, value: `${openRate || 62}%`, sub: "+5%", icon: "star", tone: "teal" as const, up: true },
-    { label: t.clickRate, value: `${clickRate || 27}%`, sub: "-3%", icon: "trend", tone: "gold" as const, up: false },
-  ];
-
-  function persist(next: Campaign[]) {
-    setCampaigns(next);
-    localStorage.setItem(KEY, JSON.stringify(next));
+  function fill(s: string) {
+    return s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
   }
 
-  async function send(asDraft: boolean) {
-    const row: Campaign = {
-      id: crypto.randomUUID(),
-      subject: fill(subject, vars),
-      template: tpl.name,
-      recipients: picked,
-      status: asDraft ? "draft" : "sent",
-      sentAt: asDraft ? undefined : new Date().toISOString(),
-      opens: asDraft ? 0 : 50 + (picked.length * 7) % 25,
-      clicks: asDraft ? 0 : 18 + (picked.length * 5) % 16,
-    };
-    if (!asDraft) {
-      for (const id of picked) {
-        const c = companies.find((x) => x.id === id);
-        if (!c) continue;
-        await api("/api/invites", {
-          method: "POST",
-          body: JSON.stringify({
-            email: `lead-${id.slice(0, 8)}@mail.tijarah.sa`,
-            companyName: c.legalName,
-            city: c.city || "Riyadh",
-            industry: "Steel",
-          }),
-        }).catch(() => null);
-      }
-    }
-    persist([row, ...campaigns]);
-    setMsg(asDraft ? t.draftSaved : t.campaignSent);
-    if (!asDraft) setTab("tracking");
+  const sent = rows.length;
+  const opened = rows.filter((p) => p.openedAt || p.status === "OPENED" || p.status === "SELECTED").length;
+  const openRate = sent ? Math.round((opened / sent) * 100) : 0;
+
+  async function send() {
+    await api("/api/proposals", {
+      method: "POST",
+      body: JSON.stringify({
+        companyIds: picked,
+        subject: fill(subject),
+        body: fill(body),
+      }),
+    });
+    setMsg(t.proposalSent);
+    setPicked([]);
+    setTab("tracking");
+    await load();
   }
 
-  const preview = `${fill(subject, vars)}\n\n${fill(body, vars)}`;
+  const preview = `${fill(subject)}\n\n${fill(body)}\n\n${t.publicLink}`;
 
   return (
     <div>
-      <PageHead title={t.outreach} subtitle={t.outreachSub} />
+      <PageHead title={t.outreach} subtitle={t.sendProposalHint} />
       <div className="mt-6 grid gap-4 md:grid-cols-3">
-        {stats.map((s) => (
-          <div key={s.label} className="uplift surface-slab rounded-2xl p-5">
-            <div className="flex justify-between">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">{s.label}</div>
-              <span
-                className={`grid size-8 place-items-center rounded-lg ${
-                  s.tone === "orange" ? "bg-molten/15 text-molten" : s.tone === "teal" ? "bg-cyan-500/15 text-cyan-400" : "bg-amber-500/15 text-amber-400"
-                }`}
-              >
-                <Icon name={s.icon} />
-              </span>
-            </div>
-            <div className="mt-2 font-display text-3xl font-bold">{s.value}</div>
-            <div className={`text-xs ${s.up ? "text-emerald-400" : "text-red-400"}`}>{s.sub}</div>
-          </div>
-        ))}
+        <div className="uplift surface-slab rounded-2xl p-5">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.emailsSent}</div>
+          <div className="mt-2 font-display text-3xl font-bold">{sent}</div>
+        </div>
+        <div className="uplift surface-slab rounded-2xl p-5">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.openRate}</div>
+          <div className="mt-2 font-display text-3xl font-bold">{openRate}%</div>
+        </div>
+        <div className="uplift surface-slab rounded-2xl p-5">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.followUpDue}</div>
+          <div className="mt-2 font-display text-3xl font-bold">{rows.filter((p) => p.followUpDue).length}</div>
+        </div>
       </div>
 
       <div className="mt-6 inline-flex rounded-full border border-border bg-muted/40 p-1">
@@ -220,19 +179,13 @@ export default function OutreachPage() {
             <Field label={t.message}>
               <textarea className="field min-h-[160px]" value={body} onChange={(e) => setBody(e.target.value)} />
             </Field>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t.variables}: {"{company_name}"} {"{contact_name}"} {"{discount}"} {"{quote_id}"}
-            </p>
             <div className="mt-4 rounded-xl bg-muted/40 p-4">
               <div className="text-xs uppercase tracking-widest text-muted-foreground">{t.preview}</div>
               <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-muted-foreground">{preview}</pre>
             </div>
-            <div className="mt-5 flex justify-end gap-3">
-              <button className="btn-steel" type="button" onClick={() => send(true)}>
-                {t.saveDraft}
-              </button>
-              <button className="btn-molten" type="button" disabled={!picked.length} onClick={() => send(false)}>
-                <Icon name="plane" className="size-4" /> {t.sendCampaign}
+            <div className="mt-5 flex justify-end">
+              <button className="btn-molten" type="button" disabled={!picked.length} onClick={send}>
+                <Icon name="plane" className="size-4" /> {t.sendProposal}
               </button>
             </div>
             {msg && <p className="mt-3 text-sm text-success">{msg}</p>}
@@ -244,29 +197,31 @@ export default function OutreachPage() {
             <thead className="text-muted-foreground">
               <tr>
                 <th className="p-4">{t.subject}</th>
-                <th>{t.templates}</th>
-                <th>{t.recipients}</th>
-                <th>{t.openRate}</th>
-                <th>{t.clickRate}</th>
+                <th>{t.company}</th>
+                <th>{t.yourRate}</th>
+                <th>{t.yourProfit}</th>
                 <th>{t.status}</th>
+                <th>{t.opened}</th>
               </tr>
             </thead>
             <tbody>
-              {campaigns.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
-                  <td className="p-6 text-muted-foreground" colSpan={6}>
+                  <td colSpan={6} className="p-6 text-muted-foreground">
                     {t.trackingEmpty}
                   </td>
                 </tr>
               )}
-              {campaigns.map((c) => (
+              {rows.map((c) => (
                 <tr key={c.id} className="border-t border-border">
                   <td className="p-4">{c.subject}</td>
-                  <td>{c.template}</td>
-                  <td>{c.recipients.length}</td>
-                  <td>{c.status === "sent" ? `${c.opens}%` : "—"}</td>
-                  <td>{c.status === "sent" ? `${c.clicks}%` : "—"}</td>
-                  <td className="capitalize">{c.status === "sent" ? t.sent : t.saveDraft}</td>
+                  <td>{c.companyName}</td>
+                  <td>{c.sellPrice != null ? `${c.sellPrice.toLocaleString()} SAR` : "—"}</td>
+                  <td>{c.profit != null ? `${c.profit.toLocaleString()} SAR` : "—"}</td>
+                  <td>
+                    <StatusBadge status={c.followUpDue ? "FOLLOW_UP" : c.status} />
+                  </td>
+                  <td>{c.openedAt ? new Date(c.openedAt).toLocaleString() : "—"}</td>
                 </tr>
               ))}
             </tbody>

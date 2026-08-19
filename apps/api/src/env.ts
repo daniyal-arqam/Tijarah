@@ -14,6 +14,8 @@ export const env = {
   port: Number(process.env.PORT ?? process.env.API_PORT ?? 4000),
   cookieSecure: process.env.COOKIE_SECURE === "true" || process.env.NODE_ENV === "production",
   nodeEnv: process.env.NODE_ENV ?? "development",
+  googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() ?? "",
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() ?? "",
 };
 
 export const ACCESS_TTL = "15m" as const;

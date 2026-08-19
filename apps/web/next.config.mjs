@@ -28,6 +28,8 @@ const nextConfig = {
       { source: "/suppliers", destination: "/app/suppliers", permanent: false },
       { source: "/invoices", destination: "/app/invoices", permanent: false },
       { source: "/rfqs", destination: "/app/rfqs", permanent: false },
+      { source: "/inbox", destination: "/app/inbox", permanent: false },
+      { source: "/team", destination: "/app/team", permanent: false },
     ];
   },
   async rewrites() {
@@ -35,6 +37,7 @@ const nextConfig = {
       { source: "/auth/:path*", destination: `${API}/auth/:path*` },
       { source: "/api/:path*", destination: `${API}/api/:path*` },
       { source: "/public/:path*", destination: `${API}/public/:path*` },
+      { source: "/track/:path*", destination: `${API}/track/:path*` },
     ];
   },
 };

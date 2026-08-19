@@ -12,7 +12,13 @@ type Order = {
   status: string;
   company?: { legalName: string };
   salesman?: { displayName: string };
-  quote?: { total?: number; rfq?: { title: string } };
+  factory?: { legalName: string } | null;
+  factoryCost?: number;
+  factoryPaidAt?: string | null;
+  factoryPaid?: boolean;
+  profit?: number;
+  jobAmount?: number;
+  quote?: { total?: number; rfq?: { title: string }; factoryCostEstimate?: number };
   events: { id: string; status: string; note?: string; createdAt: string }[];
 };
 
@@ -34,13 +40,36 @@ export default function OrderDetail() {
 
   if (!o) return <p className="text-muted-foreground">{t.loading}</p>;
   const idx = STEPS.indexOf(o.status);
+  const millAmount = o.jobAmount ?? o.factoryCost ?? o.quote?.factoryCostEstimate ?? 0;
+  const companyAmount = o.quote?.total;
 
   return (
     <div>
       <h1 className="font-display text-3xl font-bold">{t.orders}</h1>
       <p className="text-muted-foreground">
-        {o.quote?.rfq?.title} · {o.company?.legalName} · {o.quote?.total?.toLocaleString()} SAR
+        {o.quote?.rfq?.title} · {me?.role === "COMPANY" ? o.salesman?.displayName : me?.role === "FACTORY" ? o.salesman?.displayName : o.company?.legalName}
       </p>
+      {me?.role === "COMPANY" && companyAmount != null && (
+        <p className="mt-2 font-display text-2xl font-bold text-molten">{companyAmount.toLocaleString()} SAR</p>
+      )}
+      {me?.role === "FACTORY" && (
+        <p className="mt-2 font-display text-2xl font-bold text-molten">
+          {millAmount.toLocaleString()} SAR {o.factoryPaid ? `· ${t.paid}` : ""}
+        </p>
+      )}
+      {me?.role === "SALESMAN" && (
+        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+          <div className="uplift surface-slab rounded-xl p-3">
+            {t.factoryCost}: {millAmount.toLocaleString()} SAR
+          </div>
+          <div className="uplift surface-slab rounded-xl p-3">
+            {t.companySees}: {companyAmount?.toLocaleString()} SAR
+          </div>
+          <div className="uplift surface-slab rounded-xl p-3 text-molten">
+            {t.yourProfit}: {(o.profit ?? 0).toLocaleString()} SAR
+          </div>
+        </div>
+      )}
       <div className="mt-8 flex flex-wrap gap-2">
         {STEPS.map((s, i) => (
           <div
@@ -75,6 +104,18 @@ export default function OrderDetail() {
               {s.replaceAll("_", " ")}
             </button>
           ))}
+          {!o.factoryPaid && millAmount > 0 && (
+            <button
+              className="btn-molten text-sm"
+              onClick={async () => {
+                await api(`/api/orders/${o.id}/pay-factory`, { method: "POST" });
+                setMsg(t.payFactory);
+                await load();
+              }}
+            >
+              {t.payFactory}
+            </button>
+          )}
         </div>
       )}
       {me?.role === "COMPANY" && o.status === "DELIVERED" && (

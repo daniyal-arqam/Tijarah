@@ -129,6 +129,9 @@ export function StatusBadge({ status }: { status: string }) {
     SENT_TO_FACTORY: "bg-amber-500/15 text-amber-300",
     PARTIAL: "bg-amber-500/15 text-amber-300",
     UNPAID: "bg-red-500/15 text-red-400",
+    OPENED: "bg-sky-500/15 text-sky-400",
+    SELECTED: "bg-emerald-500/15 text-emerald-400",
+    FOLLOW_UP: "bg-amber-500/15 text-amber-400",
   };
   const label = s.replaceAll("_", " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
   return <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${map[s] ?? "bg-muted text-muted-foreground"}`}>{label}</span>;
